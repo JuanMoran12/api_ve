@@ -1,0 +1,80 @@
+
+services:
+  # MariaDB Database Service
+  mariadb:
+    image: mariadb:11.0
+    container_name: fastapi_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-fastapi_db}
+      MYSQL_USER: ${DB_USER:-fastapi_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-fastapi_password}
+      
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./init_schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - fastapi_network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Redis Service
+  redis:
+    image: redis:7.2-alpine
+    container_name: fastapi_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - fastapi_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  # FastAPI Application Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi_app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME:-fastapi_db}
+      - DB_USER=${DB_USER:-fastapi_user}
+      - DB_PASSWORD=${DB_PASSWORD:-fastapi_password}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - API_DEBUG=${API_DEBUG:-false}
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    networks:
+      - fastapi_network
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mariadb_data:
+    driver: local
+
+networks:
+  fastapi_network:
+    driver: bridge
