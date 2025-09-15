@@ -24,13 +24,6 @@ logger = logging.getLogger(__name__)
 
 cors_origins = os.getenv('CORS_ORIGINS', '').split(',') if os.getenv('CORS_ORIGINS') else []
 
-redis_pool = None
-appi = FastAPI()
-
-logger = logging.getLogger(__name__)
-
-cors_origins = os.getenv('CORS_ORIGINS', '').split(',') if os.getenv('CORS_ORIGINS') else []
-
 @appi.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()

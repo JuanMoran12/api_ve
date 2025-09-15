@@ -213,20 +213,39 @@ def leer_usd(connection: mariadb.Connection, fuente: str | None = None, fecha: s
             precio_anterior = None
             fecha_anterior = None
             hora_anterior = None
+
+            print("Previous price data:" , precio_viejo)
             
-            if precio_viejo:
-                precio_anterior = precio_viejo["precio"]
-                fecha_anterior = precio_viejo["fecha"]
-                hora_anterior = precio_viejo["hora"]
-                diferencia = precio_actual - precio_anterior
-                diferencia = round(diferencia, 2)
-                
-                if diferencia > 0:
-                    tendencia = "increased"
-                elif diferencia < 0:
-                    tendencia = "decreased"
-                else:
-                    tendencia = "no changes"
+            if precio_viejo and isinstance(precio_viejo, dict):
+                try:
+                    precio_anterior = float(precio_viejo.get("precio")) if precio_viejo.get("precio") is not None else None
+                    fecha_anterior = str(precio_viejo.get("fecha")) if precio_viejo.get("fecha") is not None else None
+                    hora_anterior = str(precio_viejo.get("hora")) if precio_viejo.get("hora") is not None else None
+                    
+                    if precio_anterior is None or fecha_anterior is None or hora_anterior is None:
+                        logger.warning(f"Incomplete previous price data: {precio_viejo}")
+                        # Continue with None values but don't calculate difference/trend
+                        diferencia = None
+                        tendencia = "no previous data"
+                    if precio_anterior is not None:
+                        diferencia = round(precio_actual - precio_anterior, 2)
+                        if diferencia > 0:
+                            tendencia = "increased"
+                        elif diferencia < 0:
+                            tendencia = "decreased"
+                        else:
+                            tendencia = "no changes"
+                    else:
+                        diferencia = None
+                        tendencia = "no previous data"
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error processing previous price data: {e}")
+                    diferencia = None
+                    tendencia = "error in previous data"
+            else:
+                logger.warning("No previous price data available")
+                diferencia = None
+                tendencia = "no previous data"
 
             if fuente in fuentes:
                 fuente_actual = fuentes[fuente]
@@ -292,6 +311,9 @@ def leer_eur(conexion: mariadb.Connection, moneda, fuente: str | None = None, fe
         fuente = "bcv"
         logger.info("Fuente no especificada, se usará 'bcv' por defecto.")
 
+    if not fecha:
+        fecha = datetime.datetime.now().strftime("%Y-%m-%d")
+
     try:
         sql = "SELECT precio, fecha, hora, fuente FROM detalle_precios WHERE moneda = ? and fuente = ?"
         params = [moneda, fuente]
@@ -321,25 +343,44 @@ def leer_eur(conexion: mariadb.Connection, moneda, fuente: str | None = None, fe
             fecha_anterior = None
             hora_anterior = None
             
-            if precio_viejo:
-                precio_anterior = precio_viejo["precio"]
-                fecha_anterior = precio_viejo["fecha"]
-                hora_anterior = precio_viejo["hora"]
-                diferencia = precio_actual - precio_anterior
-                diferencia = round(diferencia, 2)
-                
-                if diferencia > 0:
-                    tendencia = "increased"
-                elif diferencia < 0:
-                    tendencia = "decreased"
-                else:
-                    tendencia = "no changes"
+            print("Previous price data:", precio_viejo)
+            
+            if precio_viejo and isinstance(precio_viejo, dict):
+                try:
+                    precio_anterior = float(precio_viejo.get("precio")) if precio_viejo.get("precio") is not None else None
+                    fecha_anterior = str(precio_viejo.get("fecha")) if precio_viejo.get("fecha") is not None else None
+                    hora_anterior = str(precio_viejo.get("hora")) if precio_viejo.get("hora") is not None else None
+                    
+                    if precio_anterior is None or fecha_anterior is None or hora_anterior is None:
+                        logger.warning(f"Incomplete previous price data: {precio_viejo}")
+                        diferencia = None
+                        tendencia = "no previous data"
+                    
+                    if precio_anterior is not None:
+                        diferencia = round(precio_actual - precio_anterior, 2)
+                        if diferencia > 0:
+                            tendencia = "increased"
+                        elif diferencia < 0:
+                            tendencia = "decreased"
+                        else:
+                            tendencia = "no changes"
+                    else:
+                        diferencia = None
+                        tendencia = "no previous data"
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error processing previous price data: {e}")
+                    diferencia = None
+                    tendencia = "error in previous data"
+            else:
+                logger.warning("No previous price data available")
+                diferencia = None
+                tendencia = "no previous data"
 
             if fuente in fuentes:
                 fuente_actual = fuentes[fuente]
 
             d = {
-                "datetime" : datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
+                "datetime": datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                 "currency": moneda,
                 "data": {
                     "update_price": precio_actual,
@@ -354,7 +395,6 @@ def leer_eur(conexion: mariadb.Connection, moneda, fuente: str | None = None, fe
                 }
             }
             
-            #logger.info(f"Datos EUR leídos: {d}")
             return d
         else:
             logger.warning(f"No se encontraron datos EUR para fuente={fuente}, fecha={fecha}")
