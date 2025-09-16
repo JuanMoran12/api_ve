@@ -1,144 +1,165 @@
--- --------------------------------------------------------
--- Host:                         127.0.0.1
--- Versión del servidor:         11.5.2-MariaDB - mariadb.org binary distribution
--- SO del servidor:              Win64
--- HeidiSQL Versión:             12.6.0.6765
--- --------------------------------------------------------
+-- PostgreSQL database schema for FastAPI application
 
-/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
-/*!40101 SET NAMES utf8 */;
-/*!50503 SET NAMES utf8mb4 */;
-/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
-/*!40103 SET TIME_ZONE='+00:00' */;
-/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
-/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
-/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+-- Create the database (run this in psql or your PostgreSQL client)
+-- CREATE DATABASE base_api
+--     WITH 
+--     ENCODING = 'UTF8'
+--     LC_COLLATE = 'en_US.UTF-8'
+--     LC_CTYPE = 'en_US.UTF-8'
+--     TEMPLATE = template0;
 
+-- \c base_api
 
--- Volcando estructura de base de datos para base_api
-CREATE DATABASE IF NOT EXISTS `base_api` /*!40100 DEFAULT CHARACTER SET latin1 COLLATE latin1_swedish_ci */;
-USE `base_api`;
+-- Enable necessary extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Volcando estructura para tabla base_api.bancos
-CREATE TABLE IF NOT EXISTS `bancos` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `nombre` varchar(50) NOT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+-- Table: bancos
+CREATE TABLE IF NOT EXISTS bancos (
+  id SERIAL PRIMARY KEY,
+  nombre VARCHAR(50) NOT NULL,
+  CONSTRAINT uq_bancos_nombre UNIQUE (nombre)
+);
 
--- Volcando datos para la tabla base_api.bancos: ~14 rows (aproximadamente)
-INSERT IGNORE INTO `bancos` (`id`, `nombre`) VALUES
-	(1, 'Banesco'),
-	(2, 'BBVA Provincial'),
-	(3, 'Banco Mercantil'),
-	(4, 'Banco Plaza'),
-	(5, 'Banco Exterior'),
-	(6, 'Otras Instituciones'),
-	(7, 'Banco de Venezuela'),
-	(8, 'Banco Nacional de Crédito BNC'),
-	(9, 'Banco Activo'),
-	(10, 'Bancamiga'),
-	(11, 'BanCaribe'),
-	(12, 'Banplus'),
-	(13, 'R4'),
-	(14, 'BCV');
+-- Insert initial data into bancos
+INSERT INTO bancos (nombre) VALUES 
+  ('Banesco'),
+  ('BBVA Provincial'),
+  ('Banco Mercantil'),
+  ('Banco Plaza'),
+  ('Banco Exterior'),
+  ('Otras Instituciones'),
+  ('Banco de Venezuela'),
+  ('Banco Nacional de Crédito BNC'),
+  ('Banco Activo'),
+  ('Bancamiga'),
+  ('BanCaribe'),
+  ('Banplus'),
+  ('R4'),
+  ('BCV')
+ON CONFLICT (nombre) DO NOTHING;
 
--- Volcando estructura para vista base_api.detalle_precios
--- Creando tabla temporal para superar errores de dependencia de VIEW
-CREATE TABLE `detalle_precios` (
-	`precio` DECIMAL(10,2) NOT NULL,
-	`fecha` DATE NOT NULL,
-	`hora` TIME NOT NULL,
-	`fuente` VARCHAR(255) NOT NULL COLLATE 'latin1_swedish_ci',
-	`moneda` VARCHAR(255) NOT NULL COLLATE 'latin1_swedish_ci'
-) ENGINE=MyISAM;
+-- View: detalle_precios
+CREATE OR REPLACE VIEW detalle_precios AS 
+SELECT 
+    p.precio,
+    p.fecha,
+    p.hora,
+    f.nombre AS fuente,
+    m.nombre AS moneda
+FROM precios p
+INNER JOIN fuentes f ON p.fuente = f.id
+INNER JOIN monedas m ON p.moneda = m.id;
 
--- Volcando estructura para tabla base_api.fuentes
-CREATE TABLE IF NOT EXISTS `fuentes` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `nombre` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=31 DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+-- Table: fuentes
+CREATE TABLE IF NOT EXISTS fuentes (
+  id SERIAL PRIMARY KEY,
+  nombre VARCHAR(255) NOT NULL,
+  CONSTRAINT uq_fuentes_nombre UNIQUE (nombre)
+);
 
--- Volcando datos para la tabla base_api.fuentes: ~14 rows (aproximadamente)
-INSERT IGNORE INTO `fuentes` (`id`, `nombre`) VALUES
-	(1, 'bcv'),
-	(2, 'c_d'),
-	(3, 'i_c'),
-	(4, 'P2P'),
-	(5, 'e_m'),
-	(6, 'bcv'),
-	(7, 'c_d'),
-	(8, 'i_c'),
-	(9, 'bcv'),
-	(10, 'c_d'),
-	(11, 'i_c'),
-	(12, 'bcv'),
-	(13, 'c_d'),
-	(14, 'i_c');
+-- Insert initial data into fuentes
+INSERT INTO fuentes (nombre) VALUES 
+  ('bcv'),
+  ('c_d'),
+  ('i_c'),
+  ('P2P'),
+  ('e_m')
+ON CONFLICT (nombre) DO NOTHING;
 
--- Volcando estructura para tabla base_api.monedas
-CREATE TABLE IF NOT EXISTS `monedas` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `nombre` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=32 DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+-- Table: monedas
+CREATE TABLE IF NOT EXISTS monedas (
+  id SERIAL PRIMARY KEY,
+  nombre VARCHAR(255) NOT NULL,
+  CONSTRAINT uq_monedas_nombre UNIQUE (nombre)
+);
 
--- Volcando datos para la tabla base_api.monedas: ~11 rows (aproximadamente)
-INSERT IGNORE INTO `monedas` (`id`, `nombre`) VALUES
-	(1, 'USD'),
-	(2, 'EUR'),
-	(3, 'TRY'),
-	(4, 'RUB'),
-	(5, 'CNY'),
-	(6, 'USD'),
-	(7, 'EUR'),
-	(9, 'USD'),
-	(10, 'EUR'),
-	(12, 'USD'),
-	(13, 'EUR');
+-- Insert initial data into monedas
+INSERT INTO monedas (nombre) VALUES 
+  ('USD'),
+  ('EUR'),
+  ('TRY'),
+  ('RUB'),
+  ('CNY')
+ON CONFLICT (nombre) DO NOTHING;
 
--- Volcando estructura para tabla base_api.precios
-CREATE TABLE IF NOT EXISTS `precios` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `fuente` int(11) NOT NULL,
-  `moneda` int(11) NOT NULL,
-  `precio` decimal(10,2) NOT NULL,
-  `fecha` date NOT NULL,
-  `hora` time NOT NULL,
-  PRIMARY KEY (`id`),
-  KEY `fuente` (`fuente`),
-  KEY `moneda` (`moneda`),
-  CONSTRAINT `precios_ibfk_1` FOREIGN KEY (`fuente`) REFERENCES `fuentes` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `precios_ibfk_2` FOREIGN KEY (`moneda`) REFERENCES `monedas` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=318 DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+-- Table: precios
+CREATE TABLE IF NOT EXISTS precios (
+  id SERIAL PRIMARY KEY,
+  fuente INTEGER NOT NULL,
+  moneda INTEGER NOT NULL,
+  precio DECIMAL(10,2) NOT NULL,
+  fecha DATE NOT NULL,
+  hora TIME NOT NULL,
+  CONSTRAINT fk_precios_fuente FOREIGN KEY (fuente) REFERENCES fuentes(id) ON DELETE CASCADE,
+  CONSTRAINT fk_precios_moneda FOREIGN KEY (moneda) REFERENCES monedas(id) ON DELETE CASCADE,
+  CONSTRAINT uq_precios UNIQUE (fuente, moneda, fecha, hora)
+);
 
--- Volcando estructura para tabla base_api.tasa_informativa
-CREATE TABLE IF NOT EXISTS `tasa_informativa` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `fecha` date NOT NULL,
-  `banco` int(11) NOT NULL,
-  `compra` decimal(10,4) DEFAULT NULL,
-  `venta` decimal(10,4) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `banco` (`banco`),
-  CONSTRAINT `tasa_informativa_ibfk_1` FOREIGN KEY (`banco`) REFERENCES `bancos` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=239 DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_precios_fuente ON precios(fuente);
+CREATE INDEX IF NOT EXISTS idx_precios_moneda ON precios(moneda);
+CREATE INDEX IF NOT EXISTS idx_precios_fecha ON precios(fecha);
 
--- Eliminando tabla temporal y crear estructura final de VIEW
-DROP TABLE IF EXISTS `detalle_precios`;
-CREATE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `detalle_precios` AS SELECT 
-                p.precio,
-                p.fecha,
-                p.hora,
-                f.nombre AS fuente,
-                m.nombre AS moneda
-            FROM precios p
-            INNER JOIN fuentes  f ON p.fuente = f.id
-            INNER JOIN monedas  m ON p.moneda = m.id ;
+-- Table: tasa_informativa
+CREATE TABLE IF NOT EXISTS tasa_informativa (
+  id SERIAL PRIMARY KEY,
+  fecha DATE NOT NULL,
+  banco INTEGER NOT NULL,
+  compra DECIMAL(10,4) DEFAULT NULL,
+  venta DECIMAL(10,4) DEFAULT NULL,
+  CONSTRAINT fk_tasa_informativa_banco FOREIGN KEY (banco) REFERENCES bancos(id) ON DELETE CASCADE,
+  CONSTRAINT uq_tasa_informativa_banco_fecha UNIQUE (banco, fecha)
+);
 
-/*!40103 SET TIME_ZONE=IFNULL(@OLD_TIME_ZONE, 'system') */;
-/*!40101 SET SQL_MODE=IFNULL(@OLD_SQL_MODE, '') */;
-/*!40014 SET FOREIGN_KEY_CHECKS=IFNULL(@OLD_FOREIGN_KEY_CHECKS, 1) */;
-/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
-/*!40111 SET SQL_NOTES=IFNULL(@OLD_SQL_NOTES, 1) */;
+-- Create index for better performance
+CREATE INDEX IF NOT EXISTS idx_tasa_informativa_banco ON tasa_informativa(banco);
+CREATE INDEX IF NOT EXISTS idx_tasa_informativa_fecha ON tasa_informativa(fecha);
+
+-- Create a function to update the updated_at timestamp
+CREATE OR REPLACE FUNCTION update_modified_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Add created_at and updated_at columns to relevant tables
+ALTER TABLE precios 
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+
+ALTER TABLE tasa_informativa
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+
+-- Create triggers to update the updated_at column
+CREATE TRIGGER update_precios_modtime
+BEFORE UPDATE ON precios
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_column();
+
+CREATE TRIGGER update_tasa_informativa_modtime
+BEFORE UPDATE ON tasa_informativa
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_column();
+
+-- Create a function to get the latest exchange rate
+CREATE OR REPLACE FUNCTION get_latest_rate(p_currency VARCHAR)
+RETURNS TABLE (
+    precio DECIMAL(10,2),
+    fecha DATE,
+    hora TIME,
+    fuente VARCHAR
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT p.precio, p.fecha, p.hora, f.nombre as fuente
+    FROM precios p
+    JOIN fuentes f ON p.fuente = f.id
+    JOIN monedas m ON p.moneda = m.id
+    WHERE m.nombre = p_currency
+    ORDER BY p.fecha DESC, p.hora DESC
+    LIMIT 1;
+END;
+$$ LANGUAGE plpgsql;

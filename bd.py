@@ -1,10 +1,9 @@
-import sqlite3
-import mariadb
+import psycopg2
+from psycopg2 import pool
 import time
 from datetime import datetime, timedelta
 import asyncio
 import logging
-import datetime
 import os
 from dotenv import load_dotenv
 
@@ -12,60 +11,69 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# PostgreSQL connection parameters
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME"),
+    "port": os.getenv("DB_PORT", "5432")
+}
+
 try:
-    pool = mariadb.ConnectionPool(
-        pool_name="api_pool",
-        pool_size=10,
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME")
+    pool = psycopg2.pool.SimpleConnectionPool(
+        minconn=1,
+        maxconn=10,
+        **DB_CONFIG
     )
-    logger.info("Pool de conexiones de MariaDB creado exitosamente.")
-except mariadb.Error as e:
+    logger.info("Pool de conexiones de PostgreSQL creado exitosamente.")
+except psycopg2.Error as e:
     logger.critical(f"Error crítico al crear el pool de conexiones: {e}")
     raise
 
 def get_db_connection():
     connection = None
     try:
-        connection = pool.get_connection()
-        yield connection
+        connection = pool.getconn()
+        return connection
+    except psycopg2.Error as e:
+        logger.error(f"Error al obtener conexión de la piscina: {e}")
+        raise
     finally:
         if connection:
-            connection.close()
+            pool.putconn(connection)
 
-def crear_tablas(connection: mariadb.Connection):
+def crear_tablas(connection):
     cursor = connection.cursor()
 
     try:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS monedas (
-                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 nombre VARCHAR(30) NOT NULL,
-                UNIQUE KEY uq_monedas_nombre (nombre)
+                UNIQUE (nombre)
             )
         """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS fuentes (
-                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 nombre VARCHAR(50) NOT NULL,
-                UNIQUE KEY uq_fuentes_nombre (nombre)
+                UNIQUE (nombre)
             )
         """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS bancos (
-                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 nombre VARCHAR(80) NOT NULL,
-                UNIQUE KEY uq_bancos_nombre (nombre)
+                UNIQUE (nombre)
             )
         """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS precios (
-                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 fuente INT NOT NULL,
                 moneda INT NOT NULL,
                 precio DECIMAL(10,2) NOT NULL,
@@ -73,7 +81,7 @@ def crear_tablas(connection: mariadb.Connection):
                 hora TIME NOT NULL,
                 CONSTRAINT fk_precios_moneda FOREIGN KEY (moneda) REFERENCES monedas(id),
                 CONSTRAINT fk_precios_fuente FOREIGN KEY (fuente) REFERENCES fuentes(id),
-                UNIQUE KEY uq_precios (fuente, moneda, fecha, hora),
+                CONSTRAINT uq_precios UNIQUE (fuente, moneda, fecha, hora),
                 KEY idx_precios_moneda (moneda),
                 KEY idx_precios_fuente (fuente)
             )
@@ -81,13 +89,13 @@ def crear_tablas(connection: mariadb.Connection):
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasa_informativa (
-                id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 fecha DATE NOT NULL,
                 banco INT NOT NULL,
                 compra DECIMAL(10,2) NOT NULL,
                 venta  DECIMAL(10,2) NOT NULL,
                 CONSTRAINT fk_tasa_banco FOREIGN KEY (banco) REFERENCES bancos(id),
-                UNIQUE KEY uq_tasa (banco, fecha)
+                CONSTRAINT uq_tasa UNIQUE (banco, fecha)
             )
         """)
 
@@ -105,17 +113,29 @@ def crear_tablas(connection: mariadb.Connection):
         """)
 
         cursor.executemany(
-            "INSERT IGNORE INTO monedas (nombre) VALUES (?)",
+            """
+            INSERT INTO monedas (nombre) 
+            VALUES (%s)
+            ON CONFLICT (nombre) DO NOTHING
+            """,
             [("USD",), ("EUR",), ("TRY",), ("RUB",), ("CNY",)]
         )
 
         cursor.executemany(
-            "INSERT IGNORE INTO fuentes (nombre) VALUES (?)",
+            """
+            INSERT INTO fuentes (nombre) 
+            VALUES (%s)
+            ON CONFLICT (nombre) DO NOTHING
+            """,
             [("bcv",), ("c_d",), ("i_c",), ("e_m",)]
         )
 
         cursor.executemany(
-            "INSERT IGNORE INTO bancos (nombre) VALUES (?)",
+            """
+            INSERT INTO bancos (nombre) 
+            VALUES (%s)
+            ON CONFLICT (nombre) DO NOTHING
+            """,
             [("Banesco",),("BBVA Provincial",),("Banco Mercantil",),("Banco Plaza",),
             ("Banco Exterior",),("Otras Instituciones",),("Banco de Venezuela",),
             ("Banco Nacional de Crédito BNC",),("Banco Activo",),("Bancamiga",),
@@ -125,12 +145,14 @@ def crear_tablas(connection: mariadb.Connection):
         #connection.commit()
         logger.info("Tablas, vista y datos base creados/insertados correctamente")
 
-    except mariadb.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error en la creación de tablas: {e}")
-
+        connection.rollback()
     finally:
-        cursor.close()
-        connection.close()
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
 
 def precio_ayer(fecha: str | None = None, moneda: str | None = None, fuente: str | None = None):
     connection = pool.get_connection()
@@ -144,14 +166,14 @@ def precio_ayer(fecha: str | None = None, moneda: str | None = None, fuente: str
         fecha = datetime.date.today() - timedelta(days=1)
         
     try:
-        sql = "SELECT precio, fecha, hora FROM detalle_precios WHERE fecha = ?"
+        sql = "SELECT precio, fecha, hora FROM detalle_precios WHERE fecha = %s"
         params = [fecha]
 
         if moneda:
-            sql += " AND moneda = ?"
+            sql += " AND moneda = %s"
             params.append(moneda)
         if fuente:
-            sql += " AND fuente = ?"
+            sql += " AND fuente = %s"
             params.append(fuente)
 
         sql += " ORDER BY hora DESC LIMIT 1"
@@ -168,14 +190,14 @@ def precio_ayer(fecha: str | None = None, moneda: str | None = None, fuente: str
             logger.warning("No se encontraron datos para la fecha especificada.")
             return {"message": "No data found for the specified date"}
         
-    except mariadb.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error al consultar el precio para la fecha especificada: {e}")
         return {"error": f"Error en consulta: {str(e)}"}
     finally:
         cursor.close()
         connection.close()
         
-def leer_usd(connection: mariadb.Connection, fuente: str | None = None, fecha: str | None = None):
+def leer_usd(connection, fuente: str | None = None, fecha: str | None = None):
     cursor = connection.cursor() 
 
     if not fuente:
@@ -186,7 +208,7 @@ def leer_usd(connection: mariadb.Connection, fuente: str | None = None, fecha: s
         fecha = datetime.datetime.now().strftime("%Y-%m-%d")
 
     try:
-        sql = "SELECT precio, fecha, hora, fuente FROM detalle_precios WHERE moneda = ? and fuente = ?"
+        sql = "SELECT precio, fecha, hora, fuente FROM detalle_precios WHERE moneda = %s and fuente = %s"
         params = ["usd", fuente]
         
         if fecha:
@@ -253,7 +275,7 @@ def leer_usd(connection: mariadb.Connection, fuente: str | None = None, fecha: s
             logger.warning(f"No se encontraron datos USD para fuente={fuente}, fecha={fecha}")
             return {"message": f"No USD data found for source={fuente}, date={fecha}"}
             
-    except mariadb.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error en la consulta de USD: {e}")
         return {"error": str(e)}
     finally:
@@ -265,10 +287,10 @@ def precio_usd(fuente, moneda, valor, fecha, hora):
     cursor = None
 
     try:
-        conexion: mariadb.Connection = pool.get_connection()
+        conexion = pool.getconn()
         cursor = conexion.cursor()
 
-        sql = "insert into precios(fuente, moneda, precio, fecha, hora) values(?,?,?,?,?)"
+        sql = "INSERT INTO precios(fuente, moneda, precio, fecha, hora) VALUES (%s, %s, %s, %s, %s)"
         cursor.execute(sql, (fuente, moneda, valor, fecha, hora))
         conexion.commit()
         logger.info(f"✅ Datos insertados: fuente={fuente}, moneda={moneda}, valor={valor}, fecha={fecha}, hora={hora}")
@@ -285,7 +307,7 @@ def precio_usd(fuente, moneda, valor, fecha, hora):
         if conexion:
             conexion.close()
 
-def leer_eur(conexion: mariadb.Connection, moneda, fuente: str | None = None, fecha: str | None = None):
+def leer_eur(conexion, moneda, fuente: str | None = None, fecha: str | None = None):
     cursor = conexion.cursor() 
 
     if not fuente:
@@ -293,7 +315,7 @@ def leer_eur(conexion: mariadb.Connection, moneda, fuente: str | None = None, fe
         logger.info("Fuente no especificada, se usará 'bcv' por defecto.")
 
     try:
-        sql = "SELECT precio, fecha, hora, fuente FROM detalle_precios WHERE moneda = ? and fuente = ?"
+        sql = "SELECT precio, fecha, hora, fuente FROM detalle_precios WHERE moneda = %s and fuente = %s"
         params = [moneda, fuente]
         
         if fecha:
@@ -359,19 +381,21 @@ def leer_eur(conexion: mariadb.Connection, moneda, fuente: str | None = None, fe
         else:
             logger.warning(f"No se encontraron datos EUR para fuente={fuente}, fecha={fecha}")
             return {"message": f"No EUR data found for source={fuente}, date={fecha}"}
-    except mariadb.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error en la consulta de EUR: {e}")
         return {"error": str(e)}
     finally:
-        cursor.close()
-        conexion.close()
+        if cursor:
+            cursor.close()
+        if conexion:
+            pool.putconn(conexion)
 
-def buscar_fecha(conexion: mariadb.Connection ,fecha, moneda, fuente: str | None = None):
+def buscar_fecha(conexion, fecha, moneda, fuente: str | None = None):
     cursor = conexion.cursor()
     if not fuente:
         fuente = "bcv"
     try:
-        sql = "select precio, fecha, hora from detalle_precios where fecha = ? and moneda = ? and fuente = ?"
+        sql = "SELECT precio, fecha, hora FROM detalle_precios WHERE fecha = %s AND moneda = %s AND fuente = %s"
         cursor.execute(sql, (fecha, moneda, fuente))
         rs = list(cursor.fetchone())
 
@@ -392,11 +416,12 @@ def buscar_fecha(conexion: mariadb.Connection ,fecha, moneda, fuente: str | None
         logger.warning(f"No se encontraron datos para fecha {fecha}, moneda {moneda}: {e}")
         return {"message": f"No data found for date {fecha}, currency {moneda}"}
     finally:
-        cursor.close()
-        conexion.close()
+        if cursor:
+            cursor.close()
+        if conexion:
+            pool.putconn(conexion)
 
 def bancos(datos, valores: list):
-
     claves = {1: "Banesco",
               2: "BBVA Provincial",
               3: "Banco Mercantil",
@@ -409,49 +434,75 @@ def bancos(datos, valores: list):
               10: "Bancamiga",
               11: "BanCaribe",
               12: "Banplus",
-              13: "R4"}
+              13: "R4",
+              14: "N58 Banco Digital"}
     
     valor_a_clave = {v: k for k, v in claves.items()}
-
-    filas_modificadas = []
-    for fila in datos:
-        nueva_fila = []
-        for elemento in fila:
-            if elemento in valor_a_clave:
-                nueva_fila.append(valor_a_clave[elemento])  
-            else:
-                nueva_fila.append(elemento)
-        filas_modificadas.append(list(nueva_fila))
-
-    #print("Filas modificadas:", filas_modificadas)
+    conexion = None
+    cursor = None
 
     try:
-        conexion = pool.get_connection()
+        # Get connection from pool
+        conexion = pool.getconn()
         cursor = conexion.cursor()
-        sql = "INSERT INTO tasa_informativa (fecha, banco, compra, venta) VALUES (?, ?, ?, ?)"
-        for i in filas_modificadas:
-            if i[2] == '':
-                i[2] = '00,00'
-            compra = i[2]
-            compra = compra.replace(",", ".")
-            venta = i[3]
-            venta = venta.replace(",", ".")
+        
+        # Prepare the data
+        filas_a_insertar = []
+        for fila in datos:
             try:
-                fila = (i[0], i[1], float(compra), float(venta))
-                print("Insertando fila:", fila)
-                cursor.execute(sql, fila)
-            except Exception as e:
-                logger.error(f"Error al insertar fila {i}: {e}")
-        conexion.commit()
-        logger.info(f"Insertadas filas en bancos_precios")
+                banco_nombre = fila[1]
+                banco_id = valor_a_clave.get(banco_nombre)
+                if not banco_id:
+                    logger.warning(f"Banco no encontrado: {banco_nombre}")
+                    continue
+                    
+                compra = fila[2] if fila[2] != '' else '00.00'
+                venta = fila[3] if fila[3] != '' else '00.00'
+                
+                # Convert to float safely
+                try:
+                    compra = float(compra.replace(",", "."))
+                    venta = float(venta.replace(",", "."))
+                    filas_a_insertar.append((fila[0], banco_id, compra, venta))
+                except (ValueError, AttributeError) as e:
+                    logger.error(f"Error convirtiendo valores numéricos: {e}")
+                    continue
+                    
+            except IndexError as e:
+                logger.error(f"Error en el formato de los datos: {fila} - {e}")
+                continue
+
+        # Insert all rows in a single transaction
+        if filas_a_insertar:
+            sql = """
+                INSERT INTO tasa_informativa (fecha, banco, compra, venta) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (banco, fecha) 
+                DO UPDATE SET 
+                    compra = EXCLUDED.compra,
+                    venta = EXCLUDED.venta
+            """
+            cursor.executemany(sql, filas_a_insertar)
+            conexion.commit()
+            logger.info(f"Insertadas/actualizadas {len(filas_a_insertar)} filas en tasa_informativa")
+            return {"message": f"Insertadas/actualizadas {len(filas_a_insertar)} filas"}
+        else:
+            logger.warning("No se encontraron filas válidas para insertar")
+            return {"message": "No se encontraron filas válidas para insertar"}
+            
     except Exception as e:
+        if conexion:
+            conexion.rollback()
         logger.error(f"Error general al insertar bancos: {e}")
         return {"error": str(e)}
+        
     finally:
-        cursor.close()
-        conexion.close()
+        if cursor:
+            cursor.close()
+        if conexion:
+            pool.putconn(conexion)
 
-def ver_tasa(conexion: mariadb.Connection, fecha: str = None, banco: str = None):
+def ver_tasa(conexion, fecha: str = None, banco: str = None):
     cursor = conexion.cursor()
     try:
         sql = """
@@ -468,10 +519,10 @@ def ver_tasa(conexion: mariadb.Connection, fecha: str = None, banco: str = None)
         filtros = []
 
         if banco is not None and banco != "":
-            filtros.append("b.nombre = ?")
+            filtros.append("b.nombre = %s")
             params.append(banco)
         if fecha is not None and fecha != "":
-            filtros.append("ti.fecha = ?")
+            filtros.append("ti.fecha = %s")
             params.append(fecha)
         
         if filtros:
@@ -507,9 +558,20 @@ def ver_tasa(conexion: mariadb.Connection, fecha: str = None, banco: str = None)
         logger.error(f"Error al consultar tasa informativa: {e}")
         return {"tasa_informativa": None}
     finally:
-        cursor.close()
-        conexion.close()
+        if cursor:
+            cursor.close()
+        if conexion:
+            pool.putconn(conexion)
 
 if __name__ == "__main__":
     logger.info("Script de base de datos iniciado")
-    #print(precio_ayer(moneda="usd", fuente="i_c"))
+    # Example usage
+    conn = get_db_connection()
+    try:
+        crear_tablas(conn)
+        print("Database setup completed successfully")
+    except Exception as e:
+        print(f"Error setting up database: {e}")
+    finally:
+        if conn:
+            pool.putconn(conn)
