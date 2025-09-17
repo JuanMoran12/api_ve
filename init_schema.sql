@@ -61,9 +61,7 @@ CREATE TABLE IF NOT EXISTS fuentes (
 INSERT INTO fuentes (nombre) VALUES 
   ('bcv'),
   ('c_d'),
-  ('i_c'),
-  ('P2P'),
-  ('e_m')
+  ('i_c')
 ON CONFLICT (nombre) DO NOTHING;
 
 -- Table: monedas

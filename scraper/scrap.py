@@ -132,11 +132,8 @@ paginas = {
     "primera": os.getenv('SCRAPING_URL_PRIMERA', 'https://www.bcv.org.ve/'),
     "segunda": os.getenv('SCRAPING_URL_SEGUNDA', 'https://www.italcambio.com/servicios.php'),
     "tercera": os.getenv('SCRAPING_URL_TERCERA', 'https://criptodolar.net/'),
-    "cuarta": os.getenv('SCRAPING_URL_CUARTA', 'https://zoom.red/'),
-    "quinta": os.getenv('SCRAPING_URL_QUINTA', 'https://yadio.io/'),
     "Sexta": os.getenv('SCRAPING_URL_SEXTA', 'https://www.bcv.org.ve/tasas-informativas-sistema-bancario'),
     "septima": os.getenv('SCRAPING_URL_SEPTIMA', 'https://exchangemonitor.net/dolar-venezuela'),
-    "octava": os.getenv('SCRAPING_URL_OCTAVA', 'https://exchangemonitor.net/venezuela/dolar-binance')
 }
 
 async def play_primera():
@@ -509,77 +506,6 @@ def precios_ban():
         logging.error(f"Error al obtener precios del BCV: {e}")
         return {"error": str(e)}
         
-def precios_p2p():
-    from bd import precio_usd
-    fecha = datetime.today()
-    
-    max_intentos = 3
-    for intento in range(max_intentos):
-        pro = dar_proxy()
-        logging.info(f"Iniciando precios_p2p (intento {intento + 1}/{max_intentos}) desde: {ver_ip(pro)}")
-
-        try:
-            respuesta = requests.get(
-                url="https://exchangemonitor.net/venezuela/dolar-binance", 
-                verify=False, 
-                proxies={"http": pro, "https": pro},
-                timeout=15
-            )
-
-            if respuesta.status_code == 200:
-                soup = BeautifulSoup(respuesta.content, "html.parser")
-                num = []
-
-                pre = soup.find_all("div", class_="history-rate fs-2")
-                for i in str(pre):
-                    if i.isdigit():
-                        num.append(i)
-                    if i == ",":
-                        num.append(".")
-                
-                if len("".join(num)) > 3:
-                    valor_final = "".join(num)[3:]
-                    logging.info(f"✅ Precio P2P Binance: {valor_final}, Fecha: {fecha}")
-                
-                    fecha_dia = fecha.strftime("%Y-%m-%d")
-                    hora = fecha.strftime("%H:%M:%S")
-
-                    precio_usd(fuente=5, moneda=1, valor=formatear(valor_final), fecha=str(fecha_dia), hora=str(hora))
-                    return {"success": True, "valor": valor_final}
-                else:
-                    raise ValueError("No se pudo extraer precio válido")
-            else:
-                raise requests.RequestException(f"Status code: {respuesta.status_code}")
-
-        except Exception as e:
-            if intento < max_intentos - 1:
-                logging.warning(f"⚠️ Error en precios_p2p (intento {intento + 1}): {e} - Reintentando...")
-                time.sleep(2)
-            else:
-                logging.error(f"Error final en precios_p2p después de {max_intentos} intentos: {e}")
-                return {"error": str(e)}
-
-def precio_yadio():
-    pro = dar_proxy()
-    fecha = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
-
-    try:
-        respuesta = requests.get(url="https://yadio.io/", verify=False, proxies={
-            "http" : pro,
-            "https" : pro
-        })
-
-        if respuesta.status_code == 200:
-            soup = BeautifulSoup(respuesta.content, "html.parser")
-            num = []
-
-            pre = soup.find_all("span", class_="imUSD")
-            print("Precio Yadio:", pre[0].get_text(strip=True))
-
-    except Exception as e:
-        logging.error(f"Error al obtener precio Yadio: {e}")
-        return {"error": str(e)}
-
 def ver_ip(pro):
     #pro = dar_proxy()
     ip = requests.get(url="https://httpbin.org/ip", proxies={
