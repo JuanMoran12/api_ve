@@ -35,7 +35,8 @@ def get_db_connection():
     connection = None
     try:
         connection = pool.getconn()
-        return connection
+        # Generator dependency: FastAPI will run the finally block after request
+        yield connection
     except psycopg2.Error as e:
         logger.error(f"Error al obtener conexión de la piscina: {e}")
         raise
@@ -81,9 +82,7 @@ def crear_tablas(connection):
                 hora TIME NOT NULL,
                 CONSTRAINT fk_precios_moneda FOREIGN KEY (moneda) REFERENCES monedas(id),
                 CONSTRAINT fk_precios_fuente FOREIGN KEY (fuente) REFERENCES fuentes(id),
-                CONSTRAINT uq_precios UNIQUE (fuente, moneda, fecha, hora),
-                KEY idx_precios_moneda (moneda),
-                KEY idx_precios_fuente (fuente)
+                CONSTRAINT uq_precios UNIQUE (fuente, moneda, fecha, hora)
             )
         """)
 
@@ -142,7 +141,7 @@ def crear_tablas(connection):
             ("BanCaribe",),("Banplus",),("R4",)]
         )
 
-        #connection.commit()
+        connection.commit()
         logger.info("Tablas, vista y datos base creados/insertados correctamente")
 
     except psycopg2.Error as e:
@@ -151,19 +150,17 @@ def crear_tablas(connection):
     finally:
         if cursor:
             cursor.close()
-        if connection:
-            connection.close()
 
 def precio_ayer(fecha: str | None = None, moneda: str | None = None, fuente: str | None = None):
-    connection = pool.get_connection()
+    connection = pool.getconn()
     cursor = connection.cursor()
 
     if fecha:
-        fecha = datetime.datetime.strptime(fecha, "%Y-%m-%d")
+        fecha = datetime.strptime(fecha, "%Y-%m-%d")
         fecha = fecha - timedelta(days=1)
 
     else:
-        fecha = datetime.date.today() - timedelta(days=1)
+        fecha = datetime.now().date() - timedelta(days=1)
         
     try:
         sql = "SELECT precio, fecha, hora FROM detalle_precios WHERE fecha = %s"
@@ -195,7 +192,7 @@ def precio_ayer(fecha: str | None = None, moneda: str | None = None, fuente: str
         return {"error": f"Error en consulta: {str(e)}"}
     finally:
         cursor.close()
-        connection.close()
+        pool.putconn(connection)
         
 def leer_usd(connection, fuente: str | None = None, fecha: str | None = None):
     cursor = connection.cursor() 
@@ -205,14 +202,14 @@ def leer_usd(connection, fuente: str | None = None, fecha: str | None = None):
         #logger.info("Fuente no especificada, se usará 'bcv' por defecto.")
 
     if not fecha:
-        fecha = datetime.datetime.now().strftime("%Y-%m-%d")
+        fecha = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        sql = "SELECT precio, fecha, hora, fuente FROM detalle_precios WHERE moneda = %s and fuente = %s"
+        sql = "SELECT precio, fecha, hora, fuente FROM precios WHERE moneda = %s and fuente = %s"
         params = ["usd", fuente]
         
         if fecha:
-            sql += " AND fecha = ?"
+            sql += " AND fecha = %s"
             params.append(fecha)
 
         fuentes = {"bcv": "bcv", "c_d": "criptodolar", "i_c": "italcambio"}
@@ -254,7 +251,7 @@ def leer_usd(connection, fuente: str | None = None, fecha: str | None = None):
                 fuente_actual = fuentes[fuente]
 
             d = {
-                "datetime" : datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
+                "datetime" : datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                 "currency": "usd",
                 "data": {
                     "update_price": precio_actual,
@@ -279,8 +276,8 @@ def leer_usd(connection, fuente: str | None = None, fecha: str | None = None):
         logger.error(f"Error en la consulta de USD: {e}")
         return {"error": str(e)}
     finally:
-        cursor.close()
-        connection.close()
+        if cursor:
+            cursor.close()
 
 def precio_usd(fuente, moneda, valor, fecha, hora):
     conexion = None
@@ -304,8 +301,6 @@ def precio_usd(fuente, moneda, valor, fecha, hora):
     finally:
         if cursor:
             cursor.close()
-        if conexion:
-            conexion.close()
 
 def leer_eur(conexion, moneda, fuente: str | None = None, fecha: str | None = None):
     cursor = conexion.cursor() 
@@ -319,7 +314,7 @@ def leer_eur(conexion, moneda, fuente: str | None = None, fecha: str | None = No
         params = [moneda, fuente]
         
         if fecha:
-            sql += " AND fecha = ?"
+            sql += " AND fecha = %s"
             params.append(fecha)
         
         sql += " ORDER BY fecha DESC, hora DESC LIMIT 1"
@@ -361,7 +356,7 @@ def leer_eur(conexion, moneda, fuente: str | None = None, fecha: str | None = No
                 fuente_actual = fuentes[fuente]
 
             d = {
-                "datetime" : datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
+                "datetime" : datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
                 "currency": moneda,
                 "data": {
                     "update_price": precio_actual,
@@ -387,8 +382,6 @@ def leer_eur(conexion, moneda, fuente: str | None = None, fecha: str | None = No
     finally:
         if cursor:
             cursor.close()
-        if conexion:
-            pool.putconn(conexion)
 
 def buscar_fecha(conexion, fecha, moneda, fuente: str | None = None):
     cursor = conexion.cursor()
@@ -418,8 +411,6 @@ def buscar_fecha(conexion, fecha, moneda, fuente: str | None = None):
     finally:
         if cursor:
             cursor.close()
-        if conexion:
-            pool.putconn(conexion)
 
 def bancos(datos, valores: list):
     claves = {1: "Banesco",
@@ -499,8 +490,6 @@ def bancos(datos, valores: list):
     finally:
         if cursor:
             cursor.close()
-        if conexion:
-            pool.putconn(conexion)
 
 def ver_tasa(conexion, fecha: str = None, banco: str = None):
     cursor = conexion.cursor()
@@ -566,8 +555,9 @@ def ver_tasa(conexion, fecha: str = None, banco: str = None):
 if __name__ == "__main__":
     logger.info("Script de base de datos iniciado")
     # Example usage
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = pool.getconn()
         crear_tablas(conn)
         print("Database setup completed successfully")
     except Exception as e:

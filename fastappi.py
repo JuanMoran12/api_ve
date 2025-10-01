@@ -112,12 +112,13 @@ async def monedas():
 
 @appi.on_event("startup")
 async def startup_event():
+    conn = None
     try:        
         await iniciar_redis()
 
-        conexion_pool = await asyncio.to_thread(pool.get_connection)
-
-        await asyncio.to_thread(crear_tablas, conexion_pool)
+        # Obtain a PostgreSQL connection from the pool and create tables
+        conn = await asyncio.to_thread(pool.getconn)
+        await asyncio.to_thread(crear_tablas, conn)
 
         asyncio.create_task(monedas())
         logger.info("Tarea de carga de monedas iniciada en segundo plano")
@@ -127,8 +128,8 @@ async def startup_event():
     except Exception as e:
         logger.critical("error en el startup", e)
     finally:
-        if conexion_pool:
-            await asyncio.to_thread(conexion_pool.close)
+        if conn:
+            await asyncio.to_thread(pool.putconn, conn)
 
 @appi.get("/")
 async def primera():
@@ -186,7 +187,7 @@ async def consulta(redis_client: Optional[aioredis.Redis] = Depends(get_redis_cl
 @appi.get("/api/v1/usd")
 async def usd(date: str | None = None, source: str | None = None,
               convert : str | None = None, value: float | None = None, 
-              conexion: mariadb.Connection = Depends(get_db_connection), 
+              conexion = Depends(get_db_connection), 
               cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
     
     fecha_obj = None
@@ -350,7 +351,7 @@ async def usd(date: str | None = None, source: str | None = None,
 
 @appi.get("/api/v1/eur")
 async def eur(date : str | None = None, convert : str | None = None, value: float | None = None,
-              conexion: mariadb.Connection = Depends(get_db_connection), 
+              conexion = Depends(get_db_connection), 
               cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
 
     fecha_obj = None
@@ -507,7 +508,7 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
     
 @appi.get("/api/v1/tasa_inf")
 async def tasa_inf(fecha: str | None = None, banco: str | None = None,
-                  conexion: mariadb.Connection = Depends(get_db_connection),
+                  conexion = Depends(get_db_connection),
                   cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
     
     fecha_obj = None
