@@ -1,23 +1,70 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python/
-env/
-venv/
-*.env
-.env
-.env.*
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.manifest
+*.spec
 
-# FastAPI/Uvicorn
+# Virtual environments (Windows & Linux)
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+*.env
+.env.*
+
+# IDEs
 .vscode/
 .idea/
-*.log
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
 
 # Database files
+*.db
+*.sqlite
+*.sqlite3
+# Keep your init scripts but ignore actual data files
 init.sql
 base_api.sql
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
