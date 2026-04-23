@@ -24,13 +24,6 @@ logger = logging.getLogger(__name__)
 
 cors_origins = os.getenv('CORS_ORIGINS', '').split(',') if os.getenv('CORS_ORIGINS') else []
 
-redis_pool = None
-appi = FastAPI()
-
-logger = logging.getLogger(__name__)
-
-cors_origins = os.getenv('CORS_ORIGINS', '').split(',') if os.getenv('CORS_ORIGINS') else []
-
 @appi.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
@@ -112,13 +105,12 @@ async def monedas():
 
 @appi.on_event("startup")
 async def startup_event():
-    conn = None
     try:        
         await iniciar_redis()
 
-        # Obtain a PostgreSQL connection from the pool and create tables
-        conn = await asyncio.to_thread(pool.getconn)
-        await asyncio.to_thread(crear_tablas, conn)
+        conexion_pool = await asyncio.to_thread(pool.get_connection)
+
+        await asyncio.to_thread(crear_tablas, conexion_pool)
 
         asyncio.create_task(monedas())
         logger.info("Tarea de carga de monedas iniciada en segundo plano")
@@ -128,8 +120,8 @@ async def startup_event():
     except Exception as e:
         logger.critical("error en el startup", e)
     finally:
-        if conn:
-            await asyncio.to_thread(pool.putconn, conn)
+        if conexion_pool:
+            await asyncio.to_thread(conexion_pool.close)
 
 @appi.get("/")
 async def primera():
@@ -187,7 +179,7 @@ async def consulta(redis_client: Optional[aioredis.Redis] = Depends(get_redis_cl
 @appi.get("/api/v1/usd")
 async def usd(date: str | None = None, source: str | None = None,
               convert : str | None = None, value: float | None = None, 
-              conexion = Depends(get_db_connection), 
+              conexion: mariadb.Connection = Depends(get_db_connection), 
               cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
     
     fecha_obj = None
@@ -351,7 +343,7 @@ async def usd(date: str | None = None, source: str | None = None,
 
 @appi.get("/api/v1/eur")
 async def eur(date : str | None = None, convert : str | None = None, value: float | None = None,
-              conexion = Depends(get_db_connection), 
+              conexion: mariadb.Connection = Depends(get_db_connection), 
               cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
 
     fecha_obj = None
@@ -505,10 +497,170 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
                         "details": "No data available from source bcv"
                     }}
         return p
+
+@appi.get("/api/v1/p2p")
+async def p2p(fecha: str | None = None,
+              convertir : str | None = None, valor: float | None = None, 
+              conexion: mariadb.Connection = Depends(get_db_connection), 
+              cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
+    
+    fecha_obj = None
+    if fecha:
+        formatos = ["%Y-%m-%d", "%d-%m-%Y"]
+        fecha_obj = None
+        for fmt in formatos:
+            try:
+                fecha_obj = datetime.strptime(fecha, fmt).date()
+                break
+            except ValueError:
+                continue
+        if not fecha_obj:
+            return {
+                "success": False,
+                "error": {
+                    "status_code": "400",
+                    "message": "Date format invalide",
+                    "details": f"Use one of the formats: yyyy-mm-dd (2025-08-07) or dd-mm-yyyy (07-08-2025) do not use {fecha}"
+                }
+            }
+
+    if fecha_obj:
+        data_from_db = await asyncio.to_thread(buscar_fecha, conexion, str(fecha_obj), "e_m")
+        
+        if convertir and valor is not None:
+            if not data_from_db or "update_price" not in data_from_db:
+                return {"success": False,
+                        "error": {
+                            "status_code": "404",
+                            "message": "EUR price data not found",
+                            "details": f"No data available for date {fecha_obj}"
+                        }}
+
+            try:
+                precio_con = float(data_from_db["update_price"])
+                if precio_con <= 0:
+                    return {"success": False,
+                            "error": {
+                                "status_code": "400",
+                                "message": "EUR price data not found",
+                                "details": f"No data available for date {fecha_obj}"
+                            }}
+                    
+                if convertir == "bs":
+                    resultado = precio_con * valor
+                    return {"bs_amount": round(resultado, 2), "usd": valor, "date": data_from_db["fecha"], "p2p_price": data_from_db["update_price"]}
+                elif convertir == "usd":
+                    resultado = valor / precio_con
+                    return {"usd_amount": round(resultado, 2), "bs" : valor, "date": data_from_db["fecha"], "p2p_price": data_from_db["update_price"]}
+                else:
+                    return {
+                        "success": False,
+                        "error": {
+                            "status_code": "400",
+                            "message": "Invalid Parameter",
+                            "details": "Invalid Parameter 'convert' Use 'bs' or 'usd'"
+                        }
+                    }
+            except (ValueError, TypeError) as e:
+                return {
+                    "success": False,
+                    "error": {
+                        "status_code": "400",
+                        "message": "Conversion Error",
+                        "details": f"Conversion Error: {str(e)}"
+                    }
+                }
+        
+        return data_from_db
+    
+    pre = await asyncio.to_thread(leer_usd, conexion, "e_m", str(fecha_obj) if fecha_obj else None)
+
+    if convertir and valor is not None:
+        if not pre or "update_price" not in pre:
+            return {"success": False,
+                    "error": {
+                        "status_code": "404",
+                        "message": "EUR price data not found",
+                        "details": f"No data available for date {fecha_obj}"
+                    }}
+        
+        try:
+            precio_float = float(pre["update_price"])
+            if precio_float <= 0:
+                return {"success": False,
+                        "error": {
+                            "status_code": "400",
+                            "message": "EUR price data not found",
+                            "details": f"No data available for date {fecha_obj}"
+                        }}
+                
+            if convertir == "bs":
+                resultado = precio_float * valor
+                return {"bs_amount": round(resultado, 2), "usd": valor}
+            elif convertir == "usd":
+                resultado = valor / precio_float
+                return {"usd_amount": round(resultado, 2), "bs" : valor}
+            else:
+                return {
+                    "success": False,
+                    "error": {
+                        "status_code": "400",
+                        "message": "Invalid Parameter",
+                        "details": "Invalid Parameter 'convert' Use 'bs' or 'usd'"
+                    }
+                }
+        except (ValueError, TypeError) as e:
+            return {
+                "success": False,
+                "error": {
+                    "status_code": "400",
+                    "message": "Conversion Error",
+                    "details": f"Conversion Error: {str(e)}"
+                }
+            }
+
+    if cliente_redis:
+        try:
+            nom_cache = "pre_p2p"
+            cached_data = await cliente_redis.get(name=nom_cache)
+            if cached_data:
+                return json.loads(cached_data)
+        except Exception as e:
+            logger.error("Error al obtener de Redis en el endpoint p2p:", e)
+
+        precio = await asyncio.to_thread(leer_usd, conexion, "e_m", None)
+
+        if precio and cliente_redis:
+            try:
+                precio_json = json.dumps(precio)
+                await cliente_redis.setex(name="pre_p2p", time=43200, value=precio_json)
+            except Exception as e:
+                logger.error("Error al guardar en Redis en el endpoint p2p:", e)
+
+        if not precio:
+            return {"success": False,
+                    "error": {
+                        "status_code": "404",
+                        "message": "EUR price data not found",
+                        "details": f"No data available for date {fecha_obj}"
+                    }}
+            
+        return {"p2p": precio}
+    else:
+        p = await asyncio.to_thread(leer_usd, conexion, "e_m", None)
+        logger.info("sin redis en el endpoint p2p")
+        if not p:
+            return {"success": False,
+                    "error": {
+                        "status_code": "404",
+                        "message": "EUR price data not found",
+                        "details": f"No data available for date {fecha_obj}"
+                    }}
+        return {"p2p": p}
     
 @appi.get("/api/v1/tasa_inf")
 async def tasa_inf(fecha: str | None = None, banco: str | None = None,
-                  conexion = Depends(get_db_connection),
+                  conexion: mariadb.Connection = Depends(get_db_connection),
                   cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
     
     fecha_obj = None
