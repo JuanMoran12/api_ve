@@ -5,10 +5,10 @@ from scraper.scrap import primera_p, segunda_p, play_primera
 from pydantic import BaseModel
 from typing import Text, Optional
 from bd import *
+from memory_cache import memory_cache
 import uvicorn
 import asyncio
 from datetime import datetime
-import redis.asyncio as aioredis
 import json
 import os
 import logging
@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-redis_pool = None
 appi = FastAPI()
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,7 @@ async def add_process_time_header(request: Request, call_next):
         logger.error(f"Peticion fallida: {request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.4f}s")
     elif process_time > 1.0:
         logger.info(f"Peticion: {request.method} {request.url.path} tomó {process_time:.4f}s")
-    
+
     return response
 
 appi.add_middleware(
@@ -45,7 +44,7 @@ appi.add_middleware(
     allow_origins=cors_origins if cors_origins != [''] else [],
     allow_methods=["GET"],
     allow_headers=[
-        "Accept", 
+        "Accept",
         "Content-Type",
         "Authorization",
         "X-RapidAPI-Key",
@@ -53,74 +52,26 @@ appi.add_middleware(
     ]
 )
 
-async def iniciar_redis():
-    global redis_pool
-    try:
-        redis_pool = aioredis.ConnectionPool(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            db=int(os.getenv('REDIS_DB', 0)),
-            max_connections=int(os.getenv('REDIS_MAX_CONNECTIONS', 10)),
-        )
-        
-        client = aioredis.Redis(connection_pool=redis_pool)
-        await client.ping()
-        logger.info("Pool de Redis asíncrono creado y conexión exitosa.")
-    except Exception as e:
-        logger.critical(f"Error al conectar a Redis: {e}")
-        redis_pool = None
-
-async def get_redis_client():
-    if not redis_pool:
-        yield None
-        return
-    
-    client = aioredis.Redis(connection_pool=redis_pool, decode_responses=True)
-    try:
-        yield client
-    except Exception as e:
-        logger.error(f"Error al usar el cliente de Redis: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail="Error al conectar con el servicio de caché (Redis)."
-        )
-    finally:
-        await client.aclose()
-
 async def monedas():
-    global redis_pool
-    
-    if redis_pool is not None:
-        try:
-            client = aioredis.Redis(connection_pool=redis_pool, decode_responses=True)
-            data_from_db = await play_primera()
-            cache_key = "monedas_data"
-            await client.setex(name=cache_key, time=43200, value=json.dumps(data_from_db))
-            logger.info("Datos de monedas almacenados en la caché de Redis.")
-            await client.aclose()
-        except Exception as e:
-            logger.error(f"Error al guardar en Redis: {e}")
-    else:
-        logger.critical("No se pudo conectar con el servidor de Redis")
+    try:
+        data_from_db = await play_primera()
+        cache_key = "monedas_data"
+        memory_cache.setex(name=cache_key, time=43200, value=json.dumps(data_from_db))
+        logger.info("Datos de monedas almacenados en la caché en memoria.")
+    except Exception as e:
+        logger.error(f"Error al guardar en memoria: {e}")
 
 @appi.on_event("startup")
 async def startup_event():
-    try:        
-        await iniciar_redis()
-
+    try:
         conexion_pool = await asyncio.to_thread(pool.get_connection)
-
         await asyncio.to_thread(crear_tablas, conexion_pool)
-
         asyncio.create_task(monedas())
         logger.info("Tarea de carga de monedas iniciada en segundo plano")
-
-    except aioredis.ConnectionError as e:
-        logger.critical(f"Error al conectar a Redis: {e}")
     except Exception as e:
         logger.critical("error en el startup", e)
     finally:
-        if conexion_pool:
+        if 'conexion_pool' in locals() and conexion_pool:
             await asyncio.to_thread(conexion_pool.close)
 
 @appi.get("/")
@@ -128,24 +79,15 @@ async def primera():
     return {"status": "ok", "message": "API working"}
 
 @appi.get("/api/v1/monedas")
-async def consulta(redis_client: Optional[aioredis.Redis] = Depends(get_redis_client)):
-    
-    data_from_db = None
-    
-    if redis_client:
-        try:
-            cache_key = "monedas_data"
-            cached_data = await redis_client.get(cache_key)
+async def consulta():
+    cache_key = "monedas_data"
+    cached_data = memory_cache.get(cache_key)
 
-            if cached_data:
-                return json.loads(cached_data.decode("utf-8"))
-            
-        except aioredis.ConnectionError as e:
-            logger.error(f"Error de conexión a Redis durante la operación consulta de monedas: {e}")
-    
+    if cached_data:
+        return json.loads(cached_data)
+
     try:
         data_from_db = await play_primera()
-        
         if isinstance(data_from_db, dict) and "error" in data_from_db:
             return {
                 "success": False,
@@ -156,17 +98,13 @@ async def consulta(redis_client: Optional[aioredis.Redis] = Depends(get_redis_cl
                 }
             }
         
-        if redis_client and data_from_db:
-            try:
-                cache_key = "monedas_data"
-                await redis_client.setex(name=cache_key, time=43200, value=json.dumps(data_from_db))
-                logger.info(f"Datos de {cache_key} almacenados en la caché de Redis.")
-            except aioredis.ConnectionError as e:
-                logger.error(f"Error al guardar {cache_key} de monedas en Redis: {e}")
-                
+        if data_from_db:
+            memory_cache.setex(name=cache_key, time=43200, value=json.dumps(data_from_db))
+            logger.info(f"Datos de {cache_key} almacenados en la caché en memoria.")
+        
         return data_from_db
     except Exception as e:
-        logger.error(f"Error al obtener datos de la funcion primera_play: {e}")
+        logger.error(f"Error al obtener datos: {e}")
         return {
             "success": False,
             "error": {
@@ -178,10 +116,9 @@ async def consulta(redis_client: Optional[aioredis.Redis] = Depends(get_redis_cl
 
 @appi.get("/api/v1/usd")
 async def usd(date: str | None = None, source: str | None = None,
-              convert : str | None = None, value: float | None = None, 
-              conexion: mariadb.Connection = Depends(get_db_connection), 
-              cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
-    
+              convert : str | None = None, value: float | None = None,
+              conexion: mariadb.Connection = Depends(get_db_connection)):
+
     fecha_obj = None
     if date:
         formatos = ["%Y-%m-%d", "%d-%m-%Y"]
@@ -223,7 +160,7 @@ async def usd(date: str | None = None, source: str | None = None,
                                 "message": "USD price data not found",
                                 "details": f"No data available for date {fecha_obj} from source {source}"
                             }}
-                    
+
                 if convert == "bs":
                     resultado = precio_con * value
                     return {"bs_amount": round(resultado, 2), "usd": value, "date": data_from_db["fecha"],
@@ -251,11 +188,11 @@ async def usd(date: str | None = None, source: str | None = None,
                 }
 
         return data_from_db
-    
+
     elif fecha_obj:
         data_from_db = await asyncio.to_thread(buscar_fecha, conexion, str(fecha_obj), "usd")
         return data_from_db
-    
+
     pre = await asyncio.to_thread(leer_usd, conexion, source, str(fecha_obj) if fecha_obj else None)
 
     if convert and value is not None:
@@ -266,7 +203,7 @@ async def usd(date: str | None = None, source: str | None = None,
                         "message": "USD price data not found",
                         "details": f"No data available for date {fecha_obj} from source {source}"
                     }}
-        
+
         try:
             precio_float = float(pre["update_price"])
             if precio_float <= 0:
@@ -276,7 +213,7 @@ async def usd(date: str | None = None, source: str | None = None,
                             "message": "USD price data not found",
                             "details": f"No data available for date {fecha_obj} from source {source}"
                         }}
-                
+
             if convert == "bs":
                 resultado = precio_float * value
                 return {"bs_amount": round(resultado, 2), "usd": value, "date": pre["update_date"], "source": pre["source"]}
@@ -302,49 +239,29 @@ async def usd(date: str | None = None, source: str | None = None,
                 }
             }
 
-    if cliente_redis:
-        try:
-            nom_cache = "pre_usd"
-            cached_data = await cliente_redis.get(name=nom_cache)
-            if cached_data:
-                return json.loads(cached_data)
-        except Exception as e:
-            logger.error("Error al obtener de Redis en el endpoint usd:", e)
+    nom_cache = "pre_usd"
+    cached_data = memory_cache.get(nom_cache)
+    if cached_data:
+        return json.loads(cached_data)
 
-        precio = await asyncio.to_thread(leer_usd, conexion, source, None)
+    precio = await asyncio.to_thread(leer_usd, conexion, source, None)
 
-        if precio and cliente_redis:
-            try:
-                precio_json = json.dumps(precio)
-                await cliente_redis.setex(name=nom_cache, time=43200, value=precio_json)
-            except Exception as e:
-                logger.error("Error al guardar en Redis en el endpoint usd:", e)
+    if precio:
+        memory_cache.setex(name=nom_cache, time=43200, value=json.dumps(precio))
 
-        if not precio:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "USD price data not found",
-                        "details": f"No data available for date {fecha_obj} from source {source}"
-                    }}
-            
-        return precio
-    else:
-        p = await asyncio.to_thread(leer_usd, conexion, source, None)
-        logger.info("sin redis en el endpoint usd")  
-        if not p:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "USD price data not found",
-                        "details": f"No data available for date {fecha_obj} from source {source}"
-                    }}
-        return p
+    if not precio:
+        return {"success": False,
+                "error": {
+                    "status_code": "404",
+                    "message": "USD price data not found",
+                    "details": f"No data available for date {fecha_obj} from source {source}"
+                }}
+
+    return precio
 
 @appi.get("/api/v1/eur")
 async def eur(date : str | None = None, convert : str | None = None, value: float | None = None,
-              conexion: mariadb.Connection = Depends(get_db_connection), 
-              cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
+              conexion: mariadb.Connection = Depends(get_db_connection)):
 
     fecha_obj = None
     if date:
@@ -366,7 +283,7 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
 
     if fecha_obj:
         data_from_db = await asyncio.to_thread(buscar_fecha, conexion, str(fecha_obj), "eur")
-        
+
         if convert and value is not None:
             if not data_from_db or "update_price" not in data_from_db:
                 return {"success": False,
@@ -385,7 +302,7 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
                                 "message": "EUR price data not found",
                                 "details": f"No data available for date {fecha_obj}"
                             }}
-                    
+
                 if convert == "bs":
                     resultado = precio_con * value
                     return {"bs_amount": round(resultado, 2), "eur": value, "date": data_from_db["fecha"], "eur_price": data_from_db["update_price"]}
@@ -410,9 +327,9 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
                         "details": f"Conversion Error: {str(e)}"
                     }
                 }
-        
+
         return data_from_db
-    
+
     pre = await asyncio.to_thread(leer_eur, conexion, "eur")
 
     if convert and value is not None:
@@ -423,7 +340,7 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
                         "message": "EUR price data not found",
                         "details": f"No data available for date {fecha_obj}"
                     }}
-        
+
         try:
             precio_float = float(pre["update_price"])
             if precio_float <= 0:
@@ -433,7 +350,7 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
                             "message": "EUR price data not found",
                             "details": f"No data available for date {fecha_obj}"
                         }}
-                
+
             if convert == "bs":
                 resultado = precio_float * value
                 return {"bs_amount": resultado, "eur": value}
@@ -459,51 +376,31 @@ async def eur(date : str | None = None, convert : str | None = None, value: floa
                 }
             }
 
-    if cliente_redis:
-        try:
-            nom_cache = "pre_eur"
-            cached_data = await cliente_redis.get(name=nom_cache)
-            if cached_data:
-                return json.loads(cached_data)
-        except Exception as e:
-            logger.error("Error al obtener de Redis en el endpoint eur:", e)
+    nom_cache = "pre_eur"
+    cached_data = memory_cache.get(nom_cache)
+    if cached_data:
+        return json.loads(cached_data)
 
-        precio = await asyncio.to_thread(leer_eur, conexion, "eur")
+    precio = await asyncio.to_thread(leer_eur, conexion, "eur")
 
-        if precio and cliente_redis:
-            try:
-                precio_json = json.dumps(precio)
-                await cliente_redis.setex(name=nom_cache, time=43200, value=precio_json)
-            except Exception as e:
-                logger.error("Error al guardar en Redis en el endpoint eur:", e)
+    if precio:
+        memory_cache.setex(name=nom_cache, time=43200, value=json.dumps(precio))
 
-        if not precio:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "EUR price data not found",
-                        "details": f"No data available for date {fecha_obj}"
-                    }}
-            
-        return {"eur": precio}
-    else:
-        p = await asyncio.to_thread(leer_eur, conexion, "eur")
-        logger.info("sin redis en el endpoint eur")
-        if not p:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "EUR price data not found",
-                        "details": "No data available from source bcv"
-                    }}
-        return p
+    if not precio:
+        return {"success": False,
+                "error": {
+                    "status_code": "404",
+                    "message": "EUR price data not found",
+                    "details": f"No data available for date {fecha_obj}"
+                }}
+
+    return {"eur": precio}
 
 @appi.get("/api/v1/p2p")
 async def p2p(fecha: str | None = None,
-              convertir : str | None = None, valor: float | None = None, 
-              conexion: mariadb.Connection = Depends(get_db_connection), 
-              cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
-    
+              convertir : str | None = None, valor: float | None = None,
+              conexion: mariadb.Connection = Depends(get_db_connection)):
+
     fecha_obj = None
     if fecha:
         formatos = ["%Y-%m-%d", "%d-%m-%Y"]
@@ -526,7 +423,7 @@ async def p2p(fecha: str | None = None,
 
     if fecha_obj:
         data_from_db = await asyncio.to_thread(buscar_fecha, conexion, str(fecha_obj), "e_m")
-        
+
         if convertir and valor is not None:
             if not data_from_db or "update_price" not in data_from_db:
                 return {"success": False,
@@ -545,7 +442,7 @@ async def p2p(fecha: str | None = None,
                                 "message": "EUR price data not found",
                                 "details": f"No data available for date {fecha_obj}"
                             }}
-                    
+
                 if convertir == "bs":
                     resultado = precio_con * valor
                     return {"bs_amount": round(resultado, 2), "usd": valor, "date": data_from_db["fecha"], "p2p_price": data_from_db["update_price"]}
@@ -570,9 +467,9 @@ async def p2p(fecha: str | None = None,
                         "details": f"Conversion Error: {str(e)}"
                     }
                 }
-        
+
         return data_from_db
-    
+
     pre = await asyncio.to_thread(leer_usd, conexion, "e_m", str(fecha_obj) if fecha_obj else None)
 
     if convertir and valor is not None:
@@ -583,7 +480,7 @@ async def p2p(fecha: str | None = None,
                         "message": "EUR price data not found",
                         "details": f"No data available for date {fecha_obj}"
                     }}
-        
+
         try:
             precio_float = float(pre["update_price"])
             if precio_float <= 0:
@@ -593,7 +490,7 @@ async def p2p(fecha: str | None = None,
                             "message": "EUR price data not found",
                             "details": f"No data available for date {fecha_obj}"
                         }}
-                
+
             if convertir == "bs":
                 resultado = precio_float * valor
                 return {"bs_amount": round(resultado, 2), "usd": valor}
@@ -619,50 +516,30 @@ async def p2p(fecha: str | None = None,
                 }
             }
 
-    if cliente_redis:
-        try:
-            nom_cache = "pre_p2p"
-            cached_data = await cliente_redis.get(name=nom_cache)
-            if cached_data:
-                return json.loads(cached_data)
-        except Exception as e:
-            logger.error("Error al obtener de Redis en el endpoint p2p:", e)
+    nom_cache = "pre_p2p"
+    cached_data = memory_cache.get(nom_cache)
+    if cached_data:
+        return json.loads(cached_data)
 
-        precio = await asyncio.to_thread(leer_usd, conexion, "e_m", None)
+    precio = await asyncio.to_thread(leer_usd, conexion, "e_m", None)
 
-        if precio and cliente_redis:
-            try:
-                precio_json = json.dumps(precio)
-                await cliente_redis.setex(name="pre_p2p", time=43200, value=precio_json)
-            except Exception as e:
-                logger.error("Error al guardar en Redis en el endpoint p2p:", e)
+    if precio:
+        memory_cache.setex(name=nom_cache, time=43200, value=json.dumps(precio))
 
-        if not precio:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "EUR price data not found",
-                        "details": f"No data available for date {fecha_obj}"
-                    }}
-            
-        return {"p2p": precio}
-    else:
-        p = await asyncio.to_thread(leer_usd, conexion, "e_m", None)
-        logger.info("sin redis en el endpoint p2p")
-        if not p:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "EUR price data not found",
-                        "details": f"No data available for date {fecha_obj}"
-                    }}
-        return {"p2p": p}
-    
+    if not precio:
+        return {"success": False,
+                "error": {
+                    "status_code": "404",
+                    "message": "EUR price data not found",
+                    "details": f"No data available for date {fecha_obj}"
+                }}
+
+    return {"p2p": precio}
+
 @appi.get("/api/v1/tasa_inf")
 async def tasa_inf(fecha: str | None = None, banco: str | None = None,
-                  conexion: mariadb.Connection = Depends(get_db_connection),
-                  cliente_redis: Optional[aioredis.Redis] = Depends(get_redis_client)):
-    
+                  conexion: mariadb.Connection = Depends(get_db_connection)):
+
     fecha_obj = None
     if fecha:
         formatos = ["%Y-%m-%d", "%d-%m-%Y"]
@@ -685,7 +562,7 @@ async def tasa_inf(fecha: str | None = None, banco: str | None = None,
 
     if banco:
         banco = banco.upper()
-        
+
         pre_banco = await asyncio.to_thread(ver_tasa, conexion, fecha_obj, banco)
         if pre_banco:
             return pre_banco
@@ -713,42 +590,30 @@ async def tasa_inf(fecha: str | None = None, banco: str | None = None,
                         "details": f"No data available for date {fecha_obj}"
                     }}
 
-    if cliente_redis:
-        try:
-            nom_cache = "tasa_inf"
-            cached_data = await cliente_redis.get(name=nom_cache)
-            if cached_data:
-                return json.loads(cached_data)
-        except Exception as e:
-            logger.error("Error al obtener de Redis en el endpoint tasa_inf:", e)
+    nom_cache = "tasa_inf"
+    cached_data = memory_cache.get(nom_cache)
+    if cached_data:
+        return json.loads(cached_data)
 
-        precios = await asyncio.to_thread(ver_tasa, conexion, fecha_obj, banco)
+    precios = await asyncio.to_thread(ver_tasa, conexion, fecha_obj, banco)
 
-        if precios and cliente_redis:
-            try:
-                precio_json = json.dumps(precios)
-                await cliente_redis.setex(name="tasa_inf", time=43200, value=precio_json)
-            except Exception as e:
-                logger.error("Error al guardar en Redis en el endpoint tasa_inf:", e)
+    if precios:
+        memory_cache.setex(name=nom_cache, time=43200, value=json.dumps(precios))
 
-        if not precios:
-            return {"success": False,
-                    "error": {
-                        "status_code": "404",
-                        "message": "Data not found",
-                        "details": f"No data available for date {fecha_obj}"
-                    }}
-            
-        return precios
-    
-    rs = await asyncio.to_thread(ver_tasa, conexion, fecha_obj, banco)
-    logger.info("sin redis en el endpoint tasa_inf")
-    return rs
+    if not precios:
+        return {"success": False,
+                "error": {
+                    "status_code": "404",
+                    "message": "Data not found",
+                    "details": f"No data available for date {fecha_obj}"
+                }}
+
+    return precios
 
 if __name__ == "__main__":
     uvicorn.run(
         "fastappi:appi",
         port=int(os.getenv('API_PORT', 8000)),
-        reload=os.getenv('DEBUG', 'False').lower() == 'true',  
-        workers=1  
+        reload=os.getenv('DEBUG', 'False').lower() == 'true',
+        workers=1
     )
