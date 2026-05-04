@@ -1,46 +1,38 @@
-# Use Python 3.13 slim image
-#FROM python:3.13-slim
 FROM python:3.11-slim-bookworm
 
-# Set working directory
+# Variables de entorno para Python y Playwright
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 WORKDIR /app
 
-# Install system dependencies for MariaDB and Playwright
-RUN apt-get update && apt-get install -y \
+# Instalación de dependencias de sistema (Consolidadas)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    pkg-config \
-    default-libmysqlclient-dev \
     build-essential \
+    default-libmysqlclient-dev \
+    libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y mariadb-client
-
-# Copy requirements first for better caching
+# Instalación de dependencias de Python
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Instalación de Playwright (Solo Chromium para ahorrar espacio)
+RUN playwright install chromium --with-deps && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install Playwright browsers
-#RUN playwright install chromium
-#RUN playwright install-deps chromium
-
-# Instala dependencias de navegadores
-RUN playwright install-deps
-
-# Instala todos los navegadores por defecto (chromium, firefox, webkit)
-RUN playwright install
-
-# Copy application code
+# Copia de la aplicación
 COPY . .
 
-# Create logs directory
-RUN mkdir -p /app/logs
+# Usuario de seguridad
+RUN useradd -m appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
-# Expose port
 EXPOSE 8000
 
-# No health check needed
-
-# Run the application
 CMD ["uvicorn", "fastappi:appi", "--host", "0.0.0.0", "--port", "8000"]

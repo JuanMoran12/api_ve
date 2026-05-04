@@ -10,6 +10,7 @@ import sys
 import logging
 import os
 import argparse
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,85 +22,52 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%d-%m-%y %H:%M:%S",
                     force=True)
 
-def verificar_proxies_scheduler():
-    try:
-        if not verificar_proxies_disponibles():
-            logging.critical("CRÍTICO: Verificación de proxies falló")
-            return {"estado": "crítico", "proxies_disponibles": 0}
-        else:
-            logging.info("Verificación de proxies exitosa")
-            return {"estado": "ok", "proxies_disponibles": "todos"}
-    except Exception as e:
-        logging.error(f"Error en verificación de proxies: {e}")
-        return {"estado": "error", "error": str(e)}
-
-def formatear(precio):
-    return round(float(precio.replace(",", ".")), 2)
+def get_request(url, use_proxy=True, **kwargs):
+    if use_proxy:
+        proxy = dar_proxy()
+        if proxy:
+            try:
+                return requests.get(url, proxies={"http": proxy, "https": proxy}, **kwargs)
+            except Exception as e:
+                logging.warning(f"Proxy falló, intentando conexión directa: {e}")
+    return requests.get(url, **kwargs)
 
 def dar_proxy():   
     proxy_username = os.getenv('PROXY_USERNAME')
     proxy_password = os.getenv('PROXY_PASSWORD')
     proxy_servers = os.getenv('PROXY_SERVERS', '').split(',') if os.getenv('PROXY_SERVERS') else []
-    
     if not proxy_username or not proxy_password or not proxy_servers:
-        logging.error("Credenciales de proxy no encontradas")
         return None
-    
     proxies = [f"http://{proxy_username}:{proxy_password}@{s.strip()}/" for s in proxy_servers if s.strip()]
     return random.choice(proxies) if proxies else None
 
-def verificar_proxies_disponibles():
-    proxy_username = os.getenv('PROXY_USERNAME')
-    proxy_password = os.getenv('PROXY_PASSWORD')
-    proxy_servers = os.getenv('PROXY_SERVERS', '').split(',') if os.getenv('PROXY_SERVERS') else []
-    
-    if not proxy_username or not proxy_password or not proxy_servers:
-        return False
-    
-    proxies = [f"http://{proxy_username}:{proxy_password}@{s.strip()}/" for s in proxy_servers if s.strip()]
-    
-    proxies_funcionando = 0
-    for proxy in proxies:
-        try:
-            response = requests.get("http://httpbin.org/ip", proxies={"http": proxy, "https": proxy}, timeout=10)
-            if response.status_code == 200:
-                proxies_funcionando += 1
-        except Exception:
-            continue
-    return proxies_funcionando > 0
-
-def dar_proxy_play():
-    proxy_username = os.getenv('PROXY_USERNAME')
-    proxy_password = os.getenv('PROXY_PASSWORD')
-    proxy_servers = os.getenv('PROXY_SERVERS', '').split(',') if os.getenv('PROXY_SERVERS') else []
-    
-    if not proxy_username or not proxy_password or not proxy_servers:
-        return None
-    
-    server = random.choice([s.strip() for s in proxy_servers if s.strip()])
-    return {"username": proxy_username, "password": proxy_password, "server": server}
-
 paginas = {
     "primera": os.getenv('SCRAPING_URL_PRIMERA', 'https://www.bcv.org.ve/'),
-    "segunda": os.getenv('SCRAPING_URL_SEGUNDA', 'https://www.italcambio.com/servicios.php'),
     "tercera": os.getenv('SCRAPING_URL_TERCERA', 'https://criptodolar.net/'),
 }
 
 async def play_primera():
-    pro = await asyncio.to_thread(dar_proxy)
     try:
-        respuesta = requests.get(url=paginas["primera"], verify=False, proxies={"http": pro, "https": pro})
+        respuesta = get_request(url=paginas["primera"], verify=False, timeout=15)
         if respuesta.status_code == 200:
             soup = BeautifulSoup(respuesta.content, "html.parser")
             nombres = [n.get_text(strip=True) for n in soup.find_all("div", class_="col-sm-6 col-xs-6") if n.find("span")]
             valores = [v.get_text(strip=True) for v in soup.find_all("div", class_="col-sm-6 col-xs-6 centrado") if v.find("strong")]
             
+            # Busqueda especifica
+            usd_idx = nombres.index("USD") if "USD" in nombres else -1
+            eur_idx = nombres.index("EUR") if "EUR" in nombres else -1
+            
+            valor_final_usd = float(valores[usd_idx].replace(",", ".")) if usd_idx != -1 else 0.0
+            valor_final_eur = float(valores[eur_idx].replace(",", ".")) if eur_idx != -1 else 0.0
+
             fecha = datetime.today().strftime("%Y-%m-%d")
             hora = datetime.today().strftime("%H:%M:%S")
-            datos = []
-            for n, val in zip(nombres, valores):
-                datos.append({n: {"valor": val, "fecha": fecha, "hora": hora}})
-            return datos
+            return {
+                "datos": [{n: {"valor": val, "fecha": fecha, "hora": hora}} for n, val in zip(nombres, valores)],
+                "valor_final_usd": valor_final_usd,
+                "valor_final_eur": valor_final_eur
+            }
         return {"error": respuesta.status_code}
     except Exception as e:
         return {"error": str(e)}
@@ -108,38 +76,28 @@ def primera_p():
     return asyncio.run(play_primera())
 
 def segunda_p():
-    with sync_playwright() as p:
-        pro = dar_proxy_play()
-        try:
-            browser = p.firefox.launch(headless=True, proxy={"server": f"http://{pro['server']}", "username": pro["username"], "password": pro["password"]})
-            page = browser.new_page()
-            page.goto("https://criptodolar.net/", timeout=30000)
-            soup = BeautifulSoup(page.content(), "html.parser")
-            elemento = soup.find_all("td", class_="align-middle font-weight-bold")
-            valor_final = float("".join([i for i in str(elemento) if i.isdigit() or i == ","]).replace(",", "."))
-            browser.close()
-            return {"valor": valor_final, "fecha": datetime.today().strftime("%Y-%m-%d")}
-        except Exception as e:
-            return {"error": str(e)}
-
-def tercera_p():
-    with sync_playwright() as p:
-        pro = dar_proxy_play()
-        try:
-            browser = p.firefox.launch(headless=True, proxy={"server": f"http://{pro['server']}", "username": pro["username"], "password": pro["password"]})
-            pagina = browser.new_page()
-            pagina.goto("https://www.italcambio.com/servicios.php", timeout=30000)
-            soup = BeautifulSoup(pagina.content(), "html.parser")
-            precios = [float(p.get_text(strip=True).replace(',', '.')) for p in soup.find_all("p", class_="small") if p.get_text(strip=True).replace(',', '.').replace('.', '', 1).isdigit()]
-            browser.close()
-            return {"valor": precios[1] if len(precios) >= 2 else 0.0}
-        except Exception as e:
-            return {"error": str(e)}
+    # Extraer valores para Dolar y Euro de criptodolar.net
+    try:
+        respuesta = get_request("https://criptodolar.net/", verify=False, timeout=15)
+        if respuesta.status_code == 200:
+            # Buscar Dolar y Euro (ajustando regex para mayor precisión)
+            match_usd = re.search(r'USD.*?Bs\.\s*([\d,.]+)', respuesta.text)
+            match_eur = re.search(r'EUR.*?Bs\.\s*([\d,.]+)', respuesta.text)
+            
+            res = {"fecha": datetime.today().strftime("%Y-%m-%d")}
+            if match_usd:
+                res["usd"] = float(match_usd.group(1).replace(",", "."))
+            if match_eur:
+                res["eur"] = float(match_eur.group(1).replace(",", "."))
+            
+            return res
+        return {"error": "No se pudo extraer el valor de las divisas"}
+    except Exception as e:
+        return {"error": str(e)}
         
 def precios_ban():
-    pro = dar_proxy()
     try:
-        respuesta = requests.get(url="https://www.bcv.org.ve/tasas-informativas-sistema-bancario", verify=False, proxies={"http": pro, "https": pro})
+        respuesta = get_request(url="https://www.bcv.org.ve/tasas-informativas-sistema-bancario", verify=False, timeout=15)
         if respuesta.status_code == 200:
             soup = BeautifulSoup(respuesta.content, "html.parser")
             col1 = soup.find_all("td", class_="views-field views-field-field-fecha-del-indicador")
@@ -148,25 +106,24 @@ def precios_ban():
             col4 = soup.find_all("td", class_="views-field views-field-field-tasa-venta")
             filas = [[datetime.strptime(c1.get_text(strip=True), "%d-%m-%Y").strftime("%Y-%m-%d"), c2.get_text(strip=True), c3.get_text(strip=True), c4.get_text(strip=True)] for c1, c2, c3, c4 in zip(col1, col2, col3, col4)]
             return {"datos": filas}
+        return {"error": "Respuesta no exitosa"}
     except Exception as e:
         return {"error": str(e)}
         
 def precios_p2p():
-    pro = dar_proxy()
     try:
-        respuesta = requests.get(url="https://exchangemonitor.net/venezuela/dolar-binance", verify=False, proxies={"http": pro, "https": pro}, timeout=15)
+        respuesta = get_request(url="https://exchangemonitor.net/venezuela/dolar-binance", verify=False, timeout=15)
         if respuesta.status_code == 200:
             soup = BeautifulSoup(respuesta.content, "html.parser")
-            num = [i for i in str(soup.find_all("div", class_="history-rate fs-2")) if i.isdigit() or i == ","]
+            pre = soup.find_all("div", class_="history-rate fs-2")
+            num = [i for i in str(pre) if i.isdigit() or i == ","]
             valor_final = float("".join(num).replace(",", ".")[3:])
             return {"valor": valor_final, "fecha": datetime.today().strftime("%Y-%m-%d")}
     except Exception:
         return None
 
 if __name__ == "__main__":
-    logging.info("Modo manual")
-    precios_ban()
-    segunda_p()
-    tercera_p()
-    primera_p()
-    precios_p2p()
+    #print(primera_p())
+    print(segunda_p())
+    #print(precios_ban())
+    #print(precios_p2p())
