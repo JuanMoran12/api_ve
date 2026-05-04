@@ -2,14 +2,11 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from playwright.sync_api import sync_playwright
-import time
 import random
 import asyncio
 from apscheduler.schedulers.background import BackgroundScheduler
-import sys
 import logging
 import os
-import argparse
 import re
 from dotenv import load_dotenv
 
