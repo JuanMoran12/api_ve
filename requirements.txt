@@ -1,10 +1,7 @@
 fastapi
 uvicorn[standard]
 python-dotenv
-redis
-mariadb
 requests
 beautifulsoup4
 playwright
-apscheduler
 pydantic

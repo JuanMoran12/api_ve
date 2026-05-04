@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from dotenv import load_dotenv
+from camoufox.sync_api import Camoufox
 
 load_dotenv()
 
@@ -19,7 +20,21 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%d-%m-%y %H:%M:%S",
                     force=True)
 
+# Lista de User-Agents modernos para evitar bloqueos
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+]
+
 def get_request(url, use_proxy=True, **kwargs):
+    # Inyectar User-Agent aleatorio si no se especifica uno
+    headers = kwargs.get('headers', {})
+    if 'User-Agent' not in headers:
+        headers['User-Agent'] = random.choice(USER_AGENTS)
+    kwargs['headers'] = headers
+
     if use_proxy:
         proxy = dar_proxy()
         if proxy:
@@ -106,21 +121,8 @@ def precios_ban():
         return {"error": "Respuesta no exitosa"}
     except Exception as e:
         return {"error": str(e)}
-        
-def precios_p2p():
-    try:
-        respuesta = get_request(url="https://exchangemonitor.net/venezuela/dolar-binance", verify=False, timeout=15)
-        if respuesta.status_code == 200:
-            soup = BeautifulSoup(respuesta.content, "html.parser")
-            pre = soup.find_all("div", class_="history-rate fs-2")
-            num = [i for i in str(pre) if i.isdigit() or i == ","]
-            valor_final = float("".join(num).replace(",", ".")[3:])
-            return {"valor": valor_final, "fecha": datetime.today().strftime("%Y-%m-%d")}
-    except Exception:
-        return None
 
 if __name__ == "__main__":
     #print(primera_p())
     print(segunda_p())
     #print(precios_ban())
-    #print(precios_p2p())

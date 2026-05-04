@@ -39,6 +39,9 @@ venv.bak/
 *.env
 .env.*
 
+# Scraper exclusion
+scraper/precios_2p.py
+
 # IDEs
 .vscode/
 .idea/
