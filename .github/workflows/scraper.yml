@@ -3,7 +3,7 @@ name: Scrape Currency Data
 on:
   schedule:
     - cron: '0 6,18 * * *'  # 6am and 6pm UTC (2am and 2pm VET)
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger for execution
 
 jobs:
   scrape:
