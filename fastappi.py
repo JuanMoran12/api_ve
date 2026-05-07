@@ -1,9 +1,8 @@
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from scraper.scrap import primera_p, segunda_p, precios_ban
+from fastapi.responses import JSONResponse
 from memory_cache import MemoryCache
 import uvicorn
-import asyncio
 import json
 import os
 import logging
@@ -33,20 +32,11 @@ appi.add_middleware(
     allow_headers=["Accept", "Content-Type", "Authorization"]
 )
 
-async def get_data_with_fallback(primary_func, fallback_func, cache_key):
-    cached = MemoryCache.get(cache_key)
-    if cached: return json.loads(cached)
-    
-    # Intento Primario
-    data = await asyncio.to_thread(primary_func)
-    if not data or "error" in data:
-        # Fallback
-        logger.warning(f"Primaria falló, usando fallback para {cache_key}")
-        data = await asyncio.to_thread(fallback_func)
-    
-    if data and "error" not in data:
-        MemoryCache.setex(name=cache_key, time=43200, value=json.dumps(data))
-    return data
+def read_cache(key):
+    cached = MemoryCache.get(key)
+    if cached:
+        return json.loads(cached)
+    return None
 
 @appi.get("/")
 async def root():
@@ -54,31 +44,38 @@ async def root():
 
 @appi.get("/api/v1/monedas")
 async def consulta():
-    return await get_data_with_fallback(primera_p, segunda_p, "monedas_data")
+    data = read_cache("monedas_data")
+    if not data:
+        return JSONResponse(status_code=503, content={"success": False, "message": "No data available. Scraper has not run yet or cache expired."})
+    return data
 
 @appi.get("/api/v1/usd")
 async def usd():
-    data = await get_data_with_fallback(primera_p, segunda_p, "monedas_data")
-    # Buscar especificamente USD en datos
+    data = read_cache("monedas_data")
+    if not data:
+        return JSONResponse(status_code=503, content={"success": False, "message": "No USD data available. Scraper has not run yet or cache expired."})
+
     usd_data = next((item["USD"] for item in data.get("datos", []) if "USD" in item), None)
     
     if "valor_final_usd" in data:
         return {"usd": data["valor_final_usd"], "fecha": usd_data if usd_data else data.get("fecha")}
     if "usd" in data:
         return {"usd": data["usd"], "fecha": data.get("fecha")}
-    return {"success": False, "error": "Could not fetch USD"}
+    return JSONResponse(status_code=404, content={"success": False, "message": "USD rate not found in cached data"})
 
 @appi.get("/api/v1/eur")
 async def eur():
-    data = await get_data_with_fallback(primera_p, segunda_p, "monedas_data")
-    # Buscar especificamente EUR en datos
+    data = read_cache("monedas_data")
+    if not data:
+        return JSONResponse(status_code=503, content={"success": False, "message": "No EUR data available. Scraper has not run yet or cache expired."})
+
     eur_data = next((item["EUR"] for item in data.get("datos", []) if "EUR" in item), None)
     
     if "valor_final_eur" in data:
         return {"eur": data["valor_final_eur"], "fecha": eur_data if eur_data else data.get("fecha")}
     if "eur" in data:
         return {"eur": data["eur"], "fecha": data.get("fecha")}
-    return {"success": False, "error": "Could not fetch EUR"}
+    return JSONResponse(status_code=404, content={"success": False, "message": "EUR rate not found in cached data"})
 
 @appi.get("/api/v1/convert")
 async def convert(
@@ -87,29 +84,24 @@ async def convert(
 ):
     currency = currency.lower().strip()
     if currency not in ("usd", "eur", "ves"):
-        return {"success": False, "status_code": 400, "message": "Invalid currency. Use: usd, eur, or ves"}
+        return JSONResponse(status_code=400, content={"success": False, "message": "Invalid currency. Use: usd, eur, or ves"})
 
-    cached = MemoryCache.get("monedas_data")
-    if not cached:
-        data = await get_data_with_fallback(primera_p, segunda_p, "monedas_data")
-    else:
-        data = json.loads(cached)
-
-    if not data or "error" in data:
-        return {"success": False, "status_code": 404, "message": "No exchange rate data available"}
+    data = read_cache("monedas_data")
+    if not data:
+        return JSONResponse(status_code=503, content={"success": False, "message": "No exchange rate data available. Scraper has not run yet or cache expired."})
 
     usd_rate = data.get("valor_final_usd") or data.get("usd")
     eur_rate = data.get("valor_final_eur") or data.get("eur")
     fecha = data.get("fecha")
 
     if not usd_rate and not eur_rate:
-        return {"success": False, "status_code": 404, "message": "Exchange rates not found in cache"}
+        return JSONResponse(status_code=404, content={"success": False, "message": "Exchange rates not found in cache"})
 
     try:
         usd_rate = float(usd_rate)
         eur_rate = float(eur_rate) if eur_rate else None
     except (TypeError, ValueError):
-        return {"success": False, "status_code": 500, "message": "Invalid rate format in cache"}
+        return JSONResponse(status_code=500, content={"success": False, "message": "Invalid rate format in cache"})
 
     result = {"success": True, "date": fecha, "amount": amount, "from": currency}
 
@@ -121,7 +113,7 @@ async def convert(
             result["eur_equivalent"] = round(amount * (usd_rate / eur_rate), 2)
     elif currency == "eur":
         if not eur_rate:
-            return {"success": False, "status_code": 404, "message": "EUR rate not available"}
+            return JSONResponse(status_code=404, content={"success": False, "message": "EUR rate not available"})
         result["to"] = "ves"
         result["result"] = round(amount * eur_rate, 2)
         result["rate"] = eur_rate
@@ -133,27 +125,12 @@ async def convert(
 
     return result
 
-"""@appi.get("/api/v1/p2p")
-async def p2p():
-    cached = MemoryCache.get("pre_p2p")
-    if cached: return json.loads(cached)
-    try:
-        data = await asyncio.to_thread(precios_p2p)
-        if data:
-            MemoryCache.setex(name="pre_p2p", time=43200, value=json.dumps(data))
-        return data
-    except Exception: return {"success": False, "error": "Service unavailable"}
-"""
 @appi.get("/api/v1/tasa_inf")
 async def tasa_inf():
-    cached = MemoryCache.get("tasa_inf")
-    if cached: return json.loads(cached)
-    try:
-        data = await asyncio.to_thread(precios_ban)
-        if data:
-            MemoryCache.setex(name="tasa_inf", time=43200, value=json.dumps(data))
-        return data
-    except Exception: return {"success": False, "error": "Service unavailable"}
+    data = read_cache("tasa_inf")
+    if not data:
+        return JSONResponse(status_code=503, content={"success": False, "message": "No bank rates available. Scraper has not run yet or cache expired."})
+    return data
 
 if __name__ == "__main__":
     uvicorn.run("fastappi:appi", port=int(os.getenv('API_PORT', 8000)), reload=os.getenv('DEBUG', 'False').lower() == 'true')

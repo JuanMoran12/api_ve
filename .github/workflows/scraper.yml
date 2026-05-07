@@ -1,0 +1,35 @@
+name: Scrape Currency Data
+
+on:
+  schedule:
+    - cron: '0 6,18 * * *'  # 6am and 6pm UTC (2am and 2pm VET)
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    env:
+      UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+      UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+      PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+      PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+      PROXY_SERVERS: ${{ secrets.PROXY_SERVERS }}
+      SCRAPING_URL_PRIMERA: ${{ secrets.SCRAPING_URL_PRIMERA }}
+      SCRAPING_URL_TERCERA: ${{ secrets.SCRAPING_URL_TERCERA }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-scraper.txt
+
+      - name: Run scraper
+        run: |
+          python scraper_worker.py
