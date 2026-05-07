@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from scraper.scrap import primera_p, segunda_p, precios_ban, precios_p2p
+from scraper.scrap import primera_p, segunda_p, precios_ban
 from memory_cache import MemoryCache
 import uvicorn
 import asyncio
@@ -50,7 +50,7 @@ async def get_data_with_fallback(primary_func, fallback_func, cache_key):
 
 @appi.get("/")
 async def root():
-    return {"status": "ok", "message": "API working in memory mode"}
+    return {"status": "ok", "message": "API working with Upstash Redis cache"}
 
 @appi.get("/api/v1/monedas")
 async def consulta():
@@ -80,7 +80,60 @@ async def eur():
         return {"eur": data["eur"], "fecha": data.get("fecha")}
     return {"success": False, "error": "Could not fetch EUR"}
 
-@appi.get("/api/v1/p2p")
+@appi.get("/api/v1/convert")
+async def convert(
+    currency: str = Query(..., description="Currency to convert: usd, eur, or ves"),
+    amount: float = Query(..., gt=0, description="Amount to convert")
+):
+    currency = currency.lower().strip()
+    if currency not in ("usd", "eur", "ves"):
+        return {"success": False, "status_code": 400, "message": "Invalid currency. Use: usd, eur, or ves"}
+
+    cached = MemoryCache.get("monedas_data")
+    if not cached:
+        data = await get_data_with_fallback(primera_p, segunda_p, "monedas_data")
+    else:
+        data = json.loads(cached)
+
+    if not data or "error" in data:
+        return {"success": False, "status_code": 404, "message": "No exchange rate data available"}
+
+    usd_rate = data.get("valor_final_usd") or data.get("usd")
+    eur_rate = data.get("valor_final_eur") or data.get("eur")
+    fecha = data.get("fecha")
+
+    if not usd_rate and not eur_rate:
+        return {"success": False, "status_code": 404, "message": "Exchange rates not found in cache"}
+
+    try:
+        usd_rate = float(usd_rate)
+        eur_rate = float(eur_rate) if eur_rate else None
+    except (TypeError, ValueError):
+        return {"success": False, "status_code": 500, "message": "Invalid rate format in cache"}
+
+    result = {"success": True, "date": fecha, "amount": amount, "from": currency}
+
+    if currency == "usd":
+        result["to"] = "ves"
+        result["result"] = round(amount * usd_rate, 2)
+        result["rate"] = usd_rate
+        if eur_rate:
+            result["eur_equivalent"] = round(amount * (usd_rate / eur_rate), 2)
+    elif currency == "eur":
+        if not eur_rate:
+            return {"success": False, "status_code": 404, "message": "EUR rate not available"}
+        result["to"] = "ves"
+        result["result"] = round(amount * eur_rate, 2)
+        result["rate"] = eur_rate
+        result["usd_equivalent"] = round(amount * (eur_rate / usd_rate), 2)
+    elif currency == "ves":
+        result["usd"] = {"to": "usd", "result": round(amount / usd_rate, 2), "rate": usd_rate}
+        if eur_rate:
+            result["eur"] = {"to": "eur", "result": round(amount / eur_rate, 2), "rate": eur_rate}
+
+    return result
+
+"""@appi.get("/api/v1/p2p")
 async def p2p():
     cached = MemoryCache.get("pre_p2p")
     if cached: return json.loads(cached)
@@ -90,7 +143,7 @@ async def p2p():
             MemoryCache.setex(name="pre_p2p", time=43200, value=json.dumps(data))
         return data
     except Exception: return {"success": False, "error": "Service unavailable"}
-
+"""
 @appi.get("/api/v1/tasa_inf")
 async def tasa_inf():
     cached = MemoryCache.get("tasa_inf")

@@ -9,8 +9,8 @@ import logging
 import os
 import re
 from dotenv import load_dotenv
-from camoufox.sync_api import Camoufox
-from .precios_2p import precios_p2p
+#from camoufox.sync_api import Camoufox
+#from .precios_2p import precios_p2p
 
 load_dotenv()
 
