@@ -32,11 +32,15 @@ env/
 ENV/
 env.bak/
 venv.bak/
+.playwright-mcp/
 
 # Environment variables
 .env
 *.env
 .env.*
+
+# Scraper exclusion
+scraper/precios_2p.py
 
 # IDEs
 .vscode/
