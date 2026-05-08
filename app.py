@@ -133,4 +133,4 @@ async def tasa_inf():
     return data
 
 if __name__ == "__main__":
-    uvicorn.run("fastappi:appi", port=int(os.getenv('API_PORT', 8000)), reload=os.getenv('DEBUG', 'False').lower() == 'true')
+    uvicorn.run(\"app:appi\", port=int(os.getenv('API_PORT', 8000)), reload=os.getenv('DEBUG', 'False').lower() == 'true')
