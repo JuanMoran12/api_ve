@@ -43,7 +43,7 @@ def scrape_and_cache(key, primary_func, fallback_func):
         logger.error(f"Both sources failed for {key}")
         return False
 
-    redis.setex(name=key, seconds=CACHE_TTL, value=json.dumps(data))
+    redis.setex(key, seconds=CACHE_TTL, value=json.dumps(data))
     logger.info(f"Scraped and cached {key} (TTL: {CACHE_TTL}s)")
     return True
 
