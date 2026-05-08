@@ -11,13 +11,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-appi = FastAPI()
+app = FastAPI()
 
 logger = logging.getLogger(__name__)
 
 cors_origins = os.getenv('CORS_ORIGINS', '').split(',') if os.getenv('CORS_ORIGINS') else []
 
-@appi.middleware("http")
+@app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
@@ -25,7 +25,7 @@ async def add_process_time_header(request: Request, call_next):
     response.headers["X-Process-Time"] = str(process_time)
     return response
 
-appi.add_middleware(
+app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins if cors_origins != [''] else [],
     allow_methods=["GET"],
@@ -38,18 +38,18 @@ def read_cache(key):
         return json.loads(cached)
     return None
 
-@appi.get("/")
+@app.get("/")
 async def root():
     return {"status": "ok", "message": "API working with Upstash Redis cache"}
 
-@appi.get("/api/v1/monedas")
+@app.get("/api/v1/monedas")
 async def consulta():
     data = read_cache("monedas_data")
     if not data:
         return JSONResponse(status_code=503, content={"success": False, "message": "No data available. Scraper has not run yet or cache expired."})
     return data
 
-@appi.get("/api/v1/usd")
+@app.get("/api/v1/usd")
 async def usd():
     data = read_cache("monedas_data")
     if not data:
@@ -63,7 +63,7 @@ async def usd():
         return {"usd": data["usd"], "fecha": data.get("fecha")}
     return JSONResponse(status_code=404, content={"success": False, "message": "USD rate not found in cached data"})
 
-@appi.get("/api/v1/eur")
+@app.get("/api/v1/eur")
 async def eur():
     data = read_cache("monedas_data")
     if not data:
@@ -77,7 +77,7 @@ async def eur():
         return {"eur": data["eur"], "fecha": data.get("fecha")}
     return JSONResponse(status_code=404, content={"success": False, "message": "EUR rate not found in cached data"})
 
-@appi.get("/api/v1/convert")
+@app.get("/api/v1/convert")
 async def convert(
     currency: str = Query(..., description="Currency to convert: usd, eur, or ves"),
     amount: float = Query(..., gt=0, description="Amount to convert")
@@ -125,7 +125,7 @@ async def convert(
 
     return result
 
-@appi.get("/api/v1/tasa_inf")
+@app.get("/api/v1/tasa_inf")
 async def tasa_inf():
     data = read_cache("tasa_inf")
     if not data:
@@ -133,4 +133,4 @@ async def tasa_inf():
     return data
 
 if __name__ == "__main__":
-    uvicorn.run(\"app:appi\", port=int(os.getenv('API_PORT', 8000)), reload=os.getenv('DEBUG', 'False').lower() == 'true')
+    uvicorn.run("app:app", port=int(os.getenv('API_PORT', 8000)), reload=os.getenv('DEBUG', 'False').lower() == 'true')
