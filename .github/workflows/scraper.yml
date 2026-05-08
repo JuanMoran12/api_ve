@@ -5,6 +5,9 @@ on:
     - cron: '0 6,18 * * *'  # 6am and 6pm UTC (2am and 2pm VET)
   workflow_dispatch:  # Manual trigger for execution
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -17,6 +20,7 @@ jobs:
       PROXY_SERVERS: ${{ secrets.PROXY_SERVERS }}
       SCRAPING_URL_PRIMERA: ${{ secrets.SCRAPING_URL_PRIMERA }}
       SCRAPING_URL_TERCERA: ${{ secrets.SCRAPING_URL_TERCERA }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     
     steps:
       - uses: actions/checkout@v4
