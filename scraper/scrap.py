@@ -64,7 +64,7 @@ async def play_primera():
         if respuesta.status_code == 200:
             soup = BeautifulSoup(respuesta.content, "html.parser")
             nombres = [n.get_text(strip=True) for n in soup.find_all("div", class_="col-sm-6 col-xs-6") if n.find("span")]
-            valores = [v.get_text(strip=True) for v in soup.find_all("div", class_="col-sm-6 col-xs-6 centrado") if v.find("strong")]
+            valores = [v.get_text(strip=True) for v in soup.find_all("div", class_="col-sm-6 col-xs-6 centrado textp") if v.find("strong")]
             
             # Busqueda especifica
             usd_idx = nombres.index("USD") if "USD" in nombres else -1
@@ -88,19 +88,29 @@ def primera_p():
     return asyncio.run(play_primera())
 
 def segunda_p():
-    # Extraer valores para Dolar y Euro de criptodolar.net
+    # Extraer valores para Dolar y Euro de criptodolar.net usando selectores
     try:
         respuesta = get_request("https://criptodolar.net/", verify=False, timeout=15)
         if respuesta.status_code == 200:
-            # Buscar Dolar y Euro (ajustando regex para mayor precisión)
-            match_usd = re.search(r'USD.*?Bs\.\s*([\d,.]+)', respuesta.text)
-            match_eur = re.search(r'EUR.*?Bs\.\s*([\d,.]+)', respuesta.text)
+            soup = BeautifulSoup(respuesta.content, "html.parser")
+            
+            # Buscar todas las tarjetas con la clase específica
+            cards = soup.find_all("div", class_="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6")
             
             res = {"fecha": datetime.today().strftime("%Y-%m-%d")}
-            if match_usd:
-                res["usd"] = float(match_usd.group(1).replace(",", "."))
-            if match_eur:
-                res["eur"] = float(match_eur.group(1).replace(",", "."))
+            
+            for card in cards:
+                card_text = card.get_text()
+                # Buscar precio en formato "Bs. XXX,XX"
+                match = re.search(r'Bs\.\s*([\d,.]+)', card_text)
+                
+                if match:
+                    price = float(match.group(1).replace(",", "."))
+                    
+                    if "Dólar BCV" in card_text or "BCV (USD)" in card_text:
+                        res["usd"] = price
+                    elif "Euro BCV" in card_text or "BCV (EUR)" in card_text:
+                        res["eur"] = price
             
             return res
         return {"error": "No se pudo extraer el valor de las divisas"}
