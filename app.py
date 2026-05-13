@@ -1,12 +1,16 @@
 from fastapi import FastAPI, Request, Query
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+# pyrefly: ignore [missing-import]
 from fastapi.responses import JSONResponse
 from memory_cache import MemoryCache
+# pyrefly: ignore [missing-import]
 import uvicorn
 import json
 import os
 import logging
 import time
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -55,12 +59,14 @@ async def usd():
     if not data:
         return JSONResponse(status_code=503, content={"success": False, "message": "No USD data available. Scraper has not run yet or cache expired."})
 
-    usd_data = next((item["USD"] for item in data.get("datos", []) if "USD" in item), None)
+    # Buscamos USD o usd en los datos (mayúsculas o minúsculas)
+    usd_data = next((item.get("USD") or item.get("usd") for item in data.get("datos", []) if "USD" in item or "usd" in item), None)
     
     if "valor_final_usd" in data:
         return {"usd": data["valor_final_usd"], "fecha": usd_data if usd_data else data.get("fecha")}
-    if "usd" in data:
-        return {"usd": data["usd"], "fecha": data.get("fecha")}
+    if "usd" in data or "USD" in data:
+        val = data.get("usd") or data.get("USD")
+        return {"usd": val, "fecha": usd_data if usd_data else data.get("fecha")}
     return JSONResponse(status_code=404, content={"success": False, "message": "USD rate not found in cached data"})
 
 @app.get("/api/v1/eur")
@@ -69,12 +75,14 @@ async def eur():
     if not data:
         return JSONResponse(status_code=503, content={"success": False, "message": "No EUR data available. Scraper has not run yet or cache expired."})
 
-    eur_data = next((item["EUR"] for item in data.get("datos", []) if "EUR" in item), None)
+    # Buscamos EUR o eur en los datos (mayúsculas o minúsculas)
+    eur_data = next((item.get("EUR") or item.get("eur") for item in data.get("datos", []) if "EUR" in item or "eur" in item), None)
     
     if "valor_final_eur" in data:
         return {"eur": data["valor_final_eur"], "fecha": eur_data if eur_data else data.get("fecha")}
-    if "eur" in data:
-        return {"eur": data["eur"], "fecha": data.get("fecha")}
+    if "eur" in data or "EUR" in data:
+        val = data.get("eur") or data.get("EUR")
+        return {"eur": val, "fecha": eur_data if eur_data else data.get("fecha")}
     return JSONResponse(status_code=404, content={"success": False, "message": "EUR rate not found in cached data"})
 
 @app.get("/api/v1/convert")

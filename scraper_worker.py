@@ -2,7 +2,9 @@ import json
 import logging
 import os
 from datetime import datetime
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
+# pyrefly: ignore [missing-import]
 from upstash_redis import Redis
 from scraper.scrap import primera_p, segunda_p, precios_ban
 
@@ -35,11 +37,14 @@ def scrape_and_cache(key, primary_func, fallback_func):
 
     # Try primary
     data = primary_func()
-    if not data or "error" in data:
-        logger.warning(f"Primary failed for {key}, trying fallback")
+    
+    # Check if primary failed, has error, or returned empty 'datos' list
+    if not data or "error" in data or (isinstance(data, dict) and "datos" in data and not data["datos"]):
+        logger.warning(f"Primary failed or returned empty data for {key}, trying fallback")
         data = fallback_func()
 
-    if not data or "error" in data:
+    # Re-check after fallback
+    if not data or "error" in data or (isinstance(data, dict) and "datos" in data and not data["datos"]):
         logger.error(f"Both sources failed for {key}")
         return False
 

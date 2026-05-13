@@ -1,4 +1,5 @@
 import requests
+# pyrefly: ignore [missing-import]
 from bs4 import BeautifulSoup
 from datetime import datetime
 #from playwright.sync_api import sync_playwright
@@ -7,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 #from camoufox.sync_api import Camoufox
 #from .precios_2p import precios_p2p
@@ -28,6 +30,17 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
 ]
 
+def get_proxies_list():
+    """Retorna la lista completa de proxies configurados en el .env"""
+    proxy_username = os.getenv('PROXY_USERNAME')
+    proxy_password = os.getenv('PROXY_PASSWORD')
+    proxy_servers = os.getenv('PROXY_SERVERS', '').split(',') if os.getenv('PROXY_SERVERS') else []
+    
+    if not proxy_username or not proxy_password or not proxy_servers:
+        return []
+        
+    return [f"http://{proxy_username}:{proxy_password}@{s.strip()}/" for s in proxy_servers if s.strip()]
+
 def get_request(url, use_proxy=True, **kwargs):
     # Inyectar User-Agent aleatorio si no se especifica uno
     headers = kwargs.get('headers', {})
@@ -35,23 +48,30 @@ def get_request(url, use_proxy=True, **kwargs):
         headers['User-Agent'] = random.choice(USER_AGENTS)
     kwargs['headers'] = headers
 
-    if use_proxy:
-        proxy = dar_proxy()
-        if proxy:
-            try:
-                return requests.get(url, proxies={"http": proxy, "https": proxy}, **kwargs)
-            except Exception as e:
-                logging.warning(f"Proxy falló, intentando conexión directa: {e}")
-    return requests.get(url, **kwargs)
+    # Definir un timeout por defecto si no existe
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = 15
 
-def dar_proxy():   
-    proxy_username = os.getenv('PROXY_USERNAME')
-    proxy_password = os.getenv('PROXY_PASSWORD')
-    proxy_servers = os.getenv('PROXY_SERVERS', '').split(',') if os.getenv('PROXY_SERVERS') else []
-    if not proxy_username or not proxy_password or not proxy_servers:
-        return None
-    proxies = [f"http://{proxy_username}:{proxy_password}@{s.strip()}/" for s in proxy_servers if s.strip()]
-    return random.choice(proxies) if proxies else None
+    if use_proxy:
+        proxies = get_proxies_list()
+        if proxies:
+            random.shuffle(proxies) # Rotación aleatoria
+            for proxy_url in proxies:
+                proxy_host = proxy_url.split('@')[-1] # Para loguear sin mostrar credenciales
+                try:
+                    logging.info(f"Intentando con proxy: {proxy_host}")
+                    respuesta = requests.get(url, proxies={"http": proxy_url, "https": proxy_url}, **kwargs)
+                    if respuesta.status_code == 200:
+                        return respuesta
+                    logging.warning(f"Proxy {proxy_host} devolvió status {respuesta.status_code}")
+                except Exception as e:
+                    logging.warning(f"Falla de conexión con proxy {proxy_host}: {e}")
+            
+            logging.warning("Todos los proxies fallaron. Intentando conexión directa...")
+        else:
+            logging.info("No hay proxies configurados. Usando conexión directa.")
+
+    return requests.get(url, **kwargs)
 
 paginas = {
     "primera": os.getenv('SCRAPING_URL_PRIMERA', 'https://www.bcv.org.ve/'),
@@ -133,6 +153,6 @@ def precios_ban():
         return {"error": str(e)}
 
 if __name__ == "__main__":
-    #print(primera_p())
-    print(segunda_p())
+    print(primera_p())
+    #print(segunda_p())
     #print(precios_ban())
